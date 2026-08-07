@@ -2,8 +2,6 @@ package server
 
 import (
 	"context"
-	"net/http"
-	_ "net/http/pprof"
 	"time"
 
 	"github.com/musix/backhaul/config"
@@ -33,10 +31,9 @@ func NewServer(cfg *config.ServerConfig, parentCtx context.Context) *Server {
 func (s *Server) Start() {
 	// for pprof and debugging
 	if s.config.PPROF {
-		go func() {
-			s.logger.Info("pprof started at port 6060")
-			http.ListenAndServe("0.0.0.0:6060", nil)
-		}()
+		if err := utils.StartPprof(s.ctx, "127.0.0.1:6060", s.logger); err != nil {
+			s.logger.Errorf("failed to start pprof: %v", err)
+		}
 	}
 
 	switch s.config.Transport {
@@ -51,12 +48,18 @@ func (s *Server) Start() {
 			Ports:         s.config.Ports,
 			Sniffer:       s.config.Sniffer,
 			WebPort:       s.config.WebPort,
+			WebBindAddr:   s.config.WebBindAddr,
+			WebUsername:   s.config.WebUsername,
+			WebPassword:   s.config.WebPassword,
 			SnifferLog:    s.config.SnifferLog,
 			AcceptUDP:     s.config.AcceptUDP,
 			MSS:           s.config.MSS,
 			SO_RCVBUF:     s.config.SO_RCVBUF,
 			SO_SNDBUF:     s.config.SO_SNDBUF,
 			ProxyProtocol: s.config.ProxyProtocol,
+			UDPQueueSize:  s.config.UDPQueueSize,
+			UDPQueueLimit: s.config.UDPQueueLimit,
+			UDPMaxFlows:   s.config.UDPMaxFlows,
 		}
 
 		tcpServer := transport.NewTCPServer(s.ctx, tcpConfig, s.logger)
@@ -78,6 +81,9 @@ func (s *Server) Start() {
 			MaxStreamBuffer:  s.config.MaxStreamBuffer,
 			Sniffer:          s.config.Sniffer,
 			WebPort:          s.config.WebPort,
+			WebBindAddr:      s.config.WebBindAddr,
+			WebUsername:      s.config.WebUsername,
+			WebPassword:      s.config.WebPassword,
 			SnifferLog:       s.config.SnifferLog,
 			MSS:              s.config.MSS,
 			SO_RCVBUF:        s.config.SO_RCVBUF,
@@ -99,6 +105,9 @@ func (s *Server) Start() {
 			Ports:       s.config.Ports,
 			Sniffer:     s.config.Sniffer,
 			WebPort:     s.config.WebPort,
+			WebBindAddr: s.config.WebBindAddr,
+			WebUsername: s.config.WebUsername,
+			WebPassword: s.config.WebPassword,
 			SnifferLog:  s.config.SnifferLog,
 			Mode:        s.config.Transport,
 			TLSCertFile: s.config.TLSCertFile,
@@ -124,6 +133,9 @@ func (s *Server) Start() {
 			MaxStreamBuffer:  s.config.MaxStreamBuffer,
 			Sniffer:          s.config.Sniffer,
 			WebPort:          s.config.WebPort,
+			WebBindAddr:      s.config.WebBindAddr,
+			WebUsername:      s.config.WebUsername,
+			WebPassword:      s.config.WebPassword,
 			SnifferLog:       s.config.SnifferLog,
 			Mode:             s.config.Transport,
 			TLSCertFile:      s.config.TLSCertFile,
@@ -136,21 +148,28 @@ func (s *Server) Start() {
 
 	case config.UDP:
 		udpConfig := &transport.UdpConfig{
-			BindAddr:    s.config.BindAddr,
-			Heartbeat:   time.Duration(s.config.Heartbeat) * time.Second,
-			Token:       s.config.Token,
-			ChannelSize: s.config.ChannelSize,
-			Ports:       s.config.Ports,
-			Sniffer:     s.config.Sniffer,
-			WebPort:     s.config.WebPort,
-			SnifferLog:  s.config.SnifferLog,
+			BindAddr:      s.config.BindAddr,
+			Heartbeat:     time.Duration(s.config.Heartbeat) * time.Second,
+			Token:         s.config.Token,
+			ChannelSize:   s.config.ChannelSize,
+			Ports:         s.config.Ports,
+			Sniffer:       s.config.Sniffer,
+			WebPort:       s.config.WebPort,
+			WebBindAddr:   s.config.WebBindAddr,
+			WebUsername:   s.config.WebUsername,
+			WebPassword:   s.config.WebPassword,
+			SnifferLog:    s.config.SnifferLog,
+			UDPQueueSize:  s.config.UDPQueueSize,
+			UDPQueueLimit: s.config.UDPQueueLimit,
+			UDPMaxFlows:   s.config.UDPMaxFlows,
 		}
 
 		udpServer := transport.NewUDPServer(s.ctx, udpConfig, s.logger)
 		go udpServer.Start()
 
 	default:
-		s.logger.Fatal("invalid transport type: ", s.config.Transport)
+		s.logger.Error("invalid transport type: ", s.config.Transport)
+		s.cancel()
 	}
 
 	<-s.ctx.Done()

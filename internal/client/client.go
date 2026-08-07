@@ -10,9 +10,6 @@ import (
 
 	"github.com/musix/backhaul/internal/client/transport"
 
-	"net/http"
-	_ "net/http/pprof"
-
 	"github.com/sirupsen/logrus"
 )
 
@@ -38,13 +35,15 @@ func NewClient(cfg *config.ClientConfig, parentCtx context.Context) *Client {
 func (c *Client) Start() {
 	// for pprof
 	if c.config.PPROF {
-		go func() {
-			c.logger.Info("pprof started at port 6061")
-			http.ListenAndServe("0.0.0.0:6061", nil)
-		}()
+		if err := utils.StartPprof(c.ctx, "127.0.0.1:6061", c.logger); err != nil {
+			c.logger.Errorf("failed to start pprof: %v", err)
+		}
 	}
 
 	c.logger.Infof("client with remote address %s started successfully", c.config.RemoteAddr)
+	if (c.config.Transport == config.WSS || c.config.Transport == config.WSSMUX) && !c.config.TLSVerify {
+		c.logger.Warn("TLS certificate verification is disabled for backward compatibility; set tls_verify = true when using a trusted certificate")
+	}
 
 	switch c.config.Transport {
 	case config.TCP:
@@ -55,9 +54,13 @@ func (c *Client) Start() {
 			RetryInterval:  time.Duration(c.config.RetryInterval) * time.Second,
 			DialTimeOut:    time.Duration(c.config.DialTimeout) * time.Second,
 			ConnPoolSize:   c.config.ConnectionPool,
+			MaxPoolSize:    effectiveMaxPoolSize(c.config.ConnectionPool, c.config.MaxPoolSize),
 			Token:          c.config.Token,
 			Sniffer:        c.config.Sniffer,
 			WebPort:        c.config.WebPort,
+			WebBindAddr:    c.config.WebBindAddr,
+			WebUsername:    c.config.WebUsername,
+			WebPassword:    c.config.WebPassword,
 			SnifferLog:     c.config.SnifferLog,
 			AggressivePool: c.config.AggressivePool,
 			MSS:            c.config.MSS,
@@ -75,6 +78,7 @@ func (c *Client) Start() {
 			RetryInterval:    time.Duration(c.config.RetryInterval) * time.Second,
 			DialTimeOut:      time.Duration(c.config.DialTimeout) * time.Second,
 			ConnPoolSize:     c.config.ConnectionPool,
+			MaxPoolSize:      effectiveMaxPoolSize(c.config.ConnectionPool, c.config.MaxPoolSize),
 			Token:            c.config.Token,
 			MuxVersion:       c.config.MuxVersion,
 			MaxFrameSize:     c.config.MaxFrameSize,
@@ -82,6 +86,9 @@ func (c *Client) Start() {
 			MaxStreamBuffer:  c.config.MaxStreamBuffer,
 			Sniffer:          c.config.Sniffer,
 			WebPort:          c.config.WebPort,
+			WebBindAddr:      c.config.WebBindAddr,
+			WebUsername:      c.config.WebUsername,
+			WebPassword:      c.config.WebPassword,
 			SnifferLog:       c.config.SnifferLog,
 			AggressivePool:   c.config.AggressivePool,
 			MSS:              c.config.MSS,
@@ -99,13 +106,18 @@ func (c *Client) Start() {
 			RetryInterval:  time.Duration(c.config.RetryInterval) * time.Second,
 			DialTimeOut:    time.Duration(c.config.DialTimeout) * time.Second,
 			ConnPoolSize:   c.config.ConnectionPool,
+			MaxPoolSize:    effectiveMaxPoolSize(c.config.ConnectionPool, c.config.MaxPoolSize),
 			Token:          c.config.Token,
 			Sniffer:        c.config.Sniffer,
 			WebPort:        c.config.WebPort,
+			WebBindAddr:    c.config.WebBindAddr,
+			WebUsername:    c.config.WebUsername,
+			WebPassword:    c.config.WebPassword,
 			SnifferLog:     c.config.SnifferLog,
 			Mode:           c.config.Transport,
 			AggressivePool: c.config.AggressivePool,
 			EdgeIP:         c.config.EdgeIP,
+			TLSVerify:      c.config.TLSVerify,
 		}
 		WsClient := transport.NewWSClient(c.ctx, WsConfig, c.logger)
 		go WsClient.Start()
@@ -118,6 +130,7 @@ func (c *Client) Start() {
 			RetryInterval:    time.Duration(c.config.RetryInterval) * time.Second,
 			DialTimeOut:      time.Duration(c.config.DialTimeout) * time.Second,
 			ConnPoolSize:     c.config.ConnectionPool,
+			MaxPoolSize:      effectiveMaxPoolSize(c.config.ConnectionPool, c.config.MaxPoolSize),
 			Token:            c.config.Token,
 			MuxVersion:       c.config.MuxVersion,
 			MaxFrameSize:     c.config.MaxFrameSize,
@@ -125,10 +138,14 @@ func (c *Client) Start() {
 			MaxStreamBuffer:  c.config.MaxStreamBuffer,
 			Sniffer:          c.config.Sniffer,
 			WebPort:          c.config.WebPort,
+			WebBindAddr:      c.config.WebBindAddr,
+			WebUsername:      c.config.WebUsername,
+			WebPassword:      c.config.WebPassword,
 			SnifferLog:       c.config.SnifferLog,
 			Mode:             c.config.Transport,
 			AggressivePool:   c.config.AggressivePool,
 			EdgeIP:           c.config.EdgeIP,
+			TLSVerify:        c.config.TLSVerify,
 		}
 		wsMuxClient := transport.NewWSMuxClient(c.ctx, wsMuxConfig, c.logger)
 		go wsMuxClient.Start()
@@ -139,9 +156,13 @@ func (c *Client) Start() {
 			RetryInterval:  time.Duration(c.config.RetryInterval) * time.Second,
 			DialTimeOut:    time.Duration(c.config.DialTimeout) * time.Second,
 			ConnPoolSize:   c.config.ConnectionPool,
+			MaxPoolSize:    effectiveMaxPoolSize(c.config.ConnectionPool, c.config.MaxPoolSize),
 			Token:          c.config.Token,
 			Sniffer:        c.config.Sniffer,
 			WebPort:        c.config.WebPort,
+			WebBindAddr:    c.config.WebBindAddr,
+			WebUsername:    c.config.WebUsername,
+			WebPassword:    c.config.WebPassword,
 			SnifferLog:     c.config.SnifferLog,
 			AggressivePool: c.config.AggressivePool,
 		}
@@ -149,7 +170,8 @@ func (c *Client) Start() {
 		go udpClient.Start()
 
 	default:
-		c.logger.Fatal("invalid transport type: ", c.config.Transport)
+		c.logger.Error("invalid transport type: ", c.config.Transport)
+		c.cancel()
 	}
 
 	<-c.ctx.Done()
@@ -159,6 +181,22 @@ func (c *Client) Start() {
 	// suppress other logs
 	c.logger.SetLevel(logrus.FatalLevel)
 }
+
+// effectiveMaxPoolSize also protects callers that construct ClientConfig
+// directly instead of going through cmd.LoadConfig. max_pool_size did not
+// exist in v0.7.2, so a zero value must retain adaptive pool behavior while
+// still imposing the new upper bound.
+func effectiveMaxPoolSize(base, configured int) int {
+	if configured > 0 {
+		return configured
+	}
+	maximum := base * 4
+	if minimum := base + 16; maximum < minimum {
+		maximum = minimum
+	}
+	return maximum
+}
+
 func (c *Client) Stop() {
 	if c.cancel != nil {
 		c.cancel()

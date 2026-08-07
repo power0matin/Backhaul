@@ -14,16 +14,18 @@ import (
 	"github.com/musix/backhaul/config"
 )
 
-func WebSocketDialer(ctx context.Context, addr string, edgeIP string, path string, timeout time.Duration, keepalive time.Duration, nodelay bool, token string, mode config.TransportType, retry int, SO_RCVBUF int, SO_SNDBUF int) (*websocket.Conn, error) {
+func WebSocketDialer(ctx context.Context, addr string, edgeIP string, path string, timeout time.Duration, keepalive time.Duration, nodelay bool, token string, mode config.TransportType, tlsVerify bool, retry int, SO_RCVBUF int, SO_SNDBUF int) (*websocket.Conn, error) {
 	var tunnelWSConn *websocket.Conn
 	var err error
 
-	retries := retry           // Number of retries
-	backoff := 1 * time.Second // Initial backoff duration
+	retries := retry
+	if retries < 1 {
+		retries = 1
+	}
 
 	for i := 0; i < retries; i++ {
 		// Attempt to dial the WebSocket
-		tunnelWSConn, err = attemptDialWebSocket(ctx, addr, edgeIP, path, timeout, keepalive, nodelay, token, mode, SO_RCVBUF, SO_SNDBUF)
+		tunnelWSConn, err = attemptDialWebSocket(ctx, addr, edgeIP, path, timeout, keepalive, nodelay, token, mode, tlsVerify, SO_RCVBUF, SO_SNDBUF)
 		if err == nil {
 			// If successful, return the connection
 			return tunnelWSConn, nil
@@ -34,15 +36,19 @@ func WebSocketDialer(ctx context.Context, addr string, edgeIP string, path strin
 			break
 		}
 
-		// Log the retry attempt and wait before retrying
-		time.Sleep(backoff)
-		backoff *= 2 // Exponential backoff (double the wait time after each failure)
+		if !waitRetry(ctx, i) {
+			return nil, ctx.Err()
+		}
 	}
 
 	return nil, err
 }
 
-func attemptDialWebSocket(ctx context.Context, addr string, edgeIP string, path string, timeout time.Duration, keepalive time.Duration, nodelay bool, token string, mode config.TransportType, SO_RCVBUF int, SO_SNDBUF int) (*websocket.Conn, error) {
+func attemptDialWebSocket(ctx context.Context, addr string, edgeIP string, path string, timeout time.Duration, keepalive time.Duration, nodelay bool, token string, mode config.TransportType, tlsVerify bool, SO_RCVBUF int, SO_SNDBUF int) (*websocket.Conn, error) {
+	handshakeTimeout := timeout
+	if handshakeTimeout <= 0 {
+		handshakeTimeout = 10 * time.Second
+	}
 	// Generate a random X-user-id
 	randomUserID := rand.Int31() // Generate a random int64 number
 
@@ -104,7 +110,7 @@ func attemptDialWebSocket(ctx context.Context, addr string, edgeIP string, path 
 			return nil, fmt.Errorf("invalid address format, failed to parse: %w", err)
 		}
 
-		edgeIP = fmt.Sprintf("%s:%s", edgeIP, port)
+		edgeIP = net.JoinHostPort(edgeIP, port)
 	} else {
 		edgeIP = addr
 	}
@@ -120,7 +126,7 @@ func attemptDialWebSocket(ctx context.Context, addr string, edgeIP string, path 
 
 		dialer = websocket.Dialer{
 			EnableCompression: true,
-			HandshakeTimeout:  45 * time.Second, // default handshake timeout
+			HandshakeTimeout:  handshakeTimeout,
 			NetDial: func(_, addr string) (net.Conn, error) {
 				conn, err := TcpDialer(ctx, edgeIP, "", timeout, keepalive, nodelay, 1, SO_RCVBUF, SO_SNDBUF, 0)
 				if err != nil {
@@ -132,15 +138,16 @@ func attemptDialWebSocket(ctx context.Context, addr string, edgeIP string, path 
 	case config.WSS, config.WSSMUX:
 		wsURL = fmt.Sprintf("wss://%s%s", addr, path)
 
-		// Create a TLS configuration that allows insecure connections
+		// Keep verification opt-in for wire/config compatibility with v0.7.2,
+		// which was commonly deployed with self-signed certificates.
 		tlsConfig := &tls.Config{
-			InsecureSkipVerify: true, // Skip server certificate verification
+			InsecureSkipVerify: !tlsVerify,
 		}
 
 		dialer = websocket.Dialer{
 			EnableCompression: true,
-			TLSClientConfig:   tlsConfig,        // Pass the insecure TLS config here
-			HandshakeTimeout:  45 * time.Second, // default handshake timeout
+			TLSClientConfig:   tlsConfig,
+			HandshakeTimeout:  handshakeTimeout,
 			NetDial: func(_, addr string) (net.Conn, error) {
 				conn, err := TcpDialer(ctx, edgeIP, "", timeout, keepalive, nodelay, 1, SO_RCVBUF, SO_SNDBUF, 0)
 				if err != nil {
@@ -152,9 +159,14 @@ func attemptDialWebSocket(ctx context.Context, addr string, edgeIP string, path 
 	}
 
 	// Dial to the WebSocket server
-	tunnelWSConn, _, err := dialer.Dial(wsURL, headers)
+	tunnelWSConn, _, err := dialer.DialContext(ctx, wsURL, headers)
 	if err != nil {
 		return nil, err
+	}
+	if path == "/channel" {
+		tunnelWSConn.SetReadLimit(1024)
+	} else {
+		tunnelWSConn.SetReadLimit(64 * 1024)
 	}
 	return tunnelWSConn, nil
 }

@@ -2,7 +2,7 @@ package transport
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -22,7 +22,7 @@ type UdpTransport struct {
 	logger          *logrus.Logger
 	controlChannel  net.Conn
 	usageMonitor    *web.Usage
-	restartMutex    sync.Mutex
+	restartOnce     sync.Once
 	poolConnections int32
 	loadConnections int32
 	controlFlow     chan struct{}
@@ -31,10 +31,13 @@ type UdpConfig struct {
 	RemoteAddr     string
 	Token          string
 	SnifferLog     string
-	TunnelStatus   string
+	WebBindAddr    string
+	WebUsername    string
+	WebPassword    string
 	RetryInterval  time.Duration
 	DialTimeOut    time.Duration
 	ConnPoolSize   int
+	MaxPoolSize    int
 	WebPort        int
 	Sniffer        bool
 	AggressivePool bool
@@ -52,7 +55,7 @@ func NewUDPClient(parentCtx context.Context, config *UdpConfig, logger *logrus.L
 		cancel:          cancel,
 		logger:          logger,
 		controlChannel:  nil, // will be set when a control connection is established
-		usageMonitor:    web.NewDataStore(fmt.Sprintf(":%v", config.WebPort), ctx, config.SnifferLog, config.Sniffer, &config.TunnelStatus, logger),
+		usageMonitor:    web.NewDataStore(config.WebBindAddr, config.WebPort, ctx, config.SnifferLog, config.Sniffer, "Disconnected (UDP)", config.WebUsername, config.WebPassword, logger),
 		poolConnections: 0,
 		loadConnections: 0,
 		controlFlow:     make(chan struct{}, 100),
@@ -66,52 +69,29 @@ func (c *UdpTransport) Start() {
 		go c.usageMonitor.Monitor()
 	}
 
-	c.config.TunnelStatus = "Disconnected (UDP)"
+	c.usageMonitor.SetTunnelStatus("Disconnected (UDP)")
 
 	go c.channelDialer()
 }
 
 func (c *UdpTransport) Restart() {
-	if !c.restartMutex.TryLock() {
-		c.logger.Warn("client is already restarting")
-		return
-	}
-	defer c.restartMutex.Unlock()
-
-	c.logger.Info("restarting client...")
-
-	// for removing timeout logs
-	level := c.logger.Level
-	c.logger.SetLevel(logrus.FatalLevel)
-
-	if c.cancel != nil {
+	c.restartOnce.Do(func() {
+		if c.parentctx.Err() != nil {
+			return
+		}
+		c.usageMonitor.RecordReconnect()
+		c.logger.Info("restarting client...")
 		c.cancel()
-	}
-
-	// close control channel connection
-	if c.controlChannel != nil {
-		c.controlChannel.Close()
-	}
-
-	time.Sleep(2 * time.Second)
-
-	ctx, cancel := context.WithCancel(c.parentctx)
-	c.ctx = ctx
-	c.cancel = cancel
-
-	// Re-initialize variables
-	c.controlChannel = nil
-	c.usageMonitor = web.NewDataStore(fmt.Sprintf(":%v", c.config.WebPort), ctx, c.config.SnifferLog, c.config.Sniffer, &c.config.TunnelStatus, c.logger)
-	c.config.TunnelStatus = ""
-	c.poolConnections = 0
-	c.loadConnections = 0
-	c.controlFlow = make(chan struct{}, 100)
-
-	// set the log level again
-	c.logger.SetLevel(level)
-
-	go c.Start()
-
+		if c.controlChannel != nil {
+			_ = c.controlChannel.Close()
+		}
+		if !utils.WaitForDelay(c.parentctx, 2*time.Second) {
+			return
+		}
+		next := NewUDPClient(c.parentctx, c.config, c.logger)
+		next.usageMonitor.InheritRuntimeMetrics(c.usageMonitor)
+		go next.Start()
+	})
 }
 
 func (c *UdpTransport) channelDialer() {
@@ -124,8 +104,13 @@ func (c *UdpTransport) channelDialer() {
 		default:
 			tunnelTCPConn, err := network.TcpDialer(c.ctx, c.config.RemoteAddr, "", c.config.DialTimeOut, 30, true, 3, 0, 0, 0)
 			if err != nil {
+				if c.ctx.Err() != nil {
+					return
+				}
 				c.logger.Errorf("channel dialer: %v", err)
-				time.Sleep(c.config.RetryInterval)
+				if !utils.WaitForDelay(c.ctx, c.config.RetryInterval) {
+					return
+				}
 				continue
 			}
 
@@ -153,17 +138,19 @@ func (c *UdpTransport) channelDialer() {
 					c.logger.Errorf("failed to receive control channel response: %v", err)
 				}
 				tunnelTCPConn.Close() // Close connection on error or timeout
-				time.Sleep(c.config.RetryInterval)
+				if !utils.WaitForDelay(c.ctx, c.config.RetryInterval) {
+					return
+				}
 				continue
 			}
 			// Resetting the deadline (removes any existing deadline)
 			tunnelTCPConn.SetReadDeadline(time.Time{})
 
-			if message == c.config.Token {
+			if utils.SecureTokenEqual(message, c.config.Token) {
 				c.controlChannel = tunnelTCPConn
 				c.logger.Info("control channel established successfully")
 
-				c.config.TunnelStatus = "Connected (UDP)"
+				c.usageMonitor.SetTunnelStatus("Connected (UDP)")
 
 				go c.poolMaintainer()
 				go c.channelHandler()
@@ -171,9 +158,11 @@ func (c *UdpTransport) channelDialer() {
 				return
 
 			} else {
-				c.logger.Errorf("invalid token received. Expected: %s, Received: %s. Retrying...", c.config.Token, message)
+				c.logger.Error("invalid token response received; retrying")
 				tunnelTCPConn.Close() // Close connection if the token is invalid
-				time.Sleep(c.config.RetryInterval)
+				if !utils.WaitForDelay(c.ctx, c.config.RetryInterval) {
+					return
+				}
 				continue
 			}
 		}
@@ -215,7 +204,9 @@ func (c *UdpTransport) poolMaintainer() {
 
 		case <-tickerPool.C:
 			// Accumulate pool connections over time (every second)
-			atomic.AddInt32(&poolConnectionsSum, atomic.LoadInt32(&c.poolConnections))
+			poolConnections := atomic.LoadInt32(&c.poolConnections)
+			c.usageMonitor.SetPoolConnections(int64(poolConnections))
+			atomic.AddInt32(&poolConnectionsSum, poolConnections)
 
 		case <-tickerLoad.C:
 			// Calculate the loadConnections over the last 10 seconds
@@ -227,7 +218,7 @@ func (c *UdpTransport) poolMaintainer() {
 			atomic.StoreInt32(&poolConnectionsSum, 0)                                   // Reset
 
 			// Dynamically adjust the pool size based on current connections
-			if (loadConnections + a) > poolConnectionsAvg*b {
+			if (loadConnections+a) > poolConnectionsAvg*b && newPoolSize < c.config.MaxPoolSize {
 				c.logger.Debugf("increasing pool size: %d -> %d, avg pool conn: %d, avg load conn: %d", newPoolSize, newPoolSize+1, poolConnectionsAvg, loadConnections)
 				newPoolSize++
 
@@ -238,7 +229,10 @@ func (c *UdpTransport) poolMaintainer() {
 				newPoolSize--
 
 				// send a signal to controlFlow
-				c.controlFlow <- struct{}{}
+				select {
+				case c.controlFlow <- struct{}{}:
+				default:
+				}
 			}
 		}
 	}
@@ -246,6 +240,10 @@ func (c *UdpTransport) poolMaintainer() {
 }
 
 func (c *UdpTransport) channelHandler() {
+	control := c.controlChannel
+	defer control.Close()
+	stopControlClose := context.AfterFunc(c.ctx, func() { _ = control.Close() })
+	defer stopControlClose()
 	msgChan := make(chan byte, 1000)
 
 	// Goroutine to handle the blocking ReceiveBinaryString
@@ -255,15 +253,19 @@ func (c *UdpTransport) channelHandler() {
 			case <-c.ctx.Done():
 				return
 			default:
-				msg, err := utils.ReceiveBinaryByte(c.controlChannel)
+				msg, err := utils.ReceiveBinaryByte(control)
 				if err != nil {
-					if c.cancel != nil {
-						c.logger.Error("failed to read from control channel. ", err)
+					if c.ctx.Err() == nil {
+						c.logger.Warn("control channel closed; reconnecting: ", err)
 						go c.Restart()
 					}
 					return
 				}
-				msgChan <- msg
+				select {
+				case msgChan <- msg:
+				case <-c.ctx.Done():
+					return
+				}
 			}
 		}
 	}()
@@ -272,7 +274,7 @@ func (c *UdpTransport) channelHandler() {
 	for {
 		select {
 		case <-c.ctx.Done():
-			_ = utils.SendBinaryByte(c.controlChannel, utils.SG_Closed)
+			_ = utils.SendBinaryByte(control, utils.SG_Closed)
 			return
 
 		case msg := <-msgChan:
@@ -297,7 +299,7 @@ func (c *UdpTransport) channelHandler() {
 				return
 
 			case utils.SG_RTT:
-				err := utils.SendBinaryByte(c.controlChannel, utils.SG_RTT)
+				err := utils.SendBinaryByte(control, utils.SG_RTT)
 				if err != nil {
 					c.logger.Error("failed to send RTT signal, restarting client: ", err)
 					go c.Restart()
@@ -362,7 +364,11 @@ func (c *UdpTransport) handleTunnelConn(tunConn *net.UDPConn) {
 	for {
 		n, _, err := tunConn.ReadFromUDP(buffer)
 		if err != nil {
-			c.logger.Error("failed to receive response from server:", err)
+			if c.ctx.Err() != nil || errors.Is(err, net.ErrClosed) {
+				c.logger.Debug("UDP tunnel connection closed")
+			} else {
+				c.logger.Error("failed to receive response from server:", err)
+			}
 
 			atomic.AddInt32(&c.poolConnections, -1)
 
@@ -403,20 +409,35 @@ func (c *UdpTransport) localDialer(remoteAddr string, port int, tunConn *net.UDP
 	remoteConn, err := net.DialUDP("udp", nil, remoteResolvedAddr)
 	if err != nil {
 		c.logger.Errorf("failed to dial remote UDP address: %v", err)
+		return
 	}
 
 	defer remoteConn.Close()
-
-	done := make(chan struct{})
+	c.usageMonitor.ConnectionOpened()
+	defer c.usageMonitor.ConnectionClosed()
+	done := make(chan struct{}, 2)
 	c.logger.Debugf("start to copy from tunnel %s to local %s", tunConn.LocalAddr(), remoteAddr)
 	go func() {
 		c.udpCopy(remoteConn, tunConn, port)
 		done <- struct{}{}
 	}()
+	go func() {
+		c.udpCopy(tunConn, remoteConn, port)
+		done <- struct{}{}
+	}()
 
-	c.udpCopy(tunConn, remoteConn, port)
-
-	<-done
+	completed := 0
+	select {
+	case <-c.ctx.Done():
+	case <-done:
+		completed = 1
+	}
+	_ = remoteConn.Close()
+	_ = tunConn.Close()
+	for completed < 2 {
+		<-done
+		completed++
+	}
 
 }
 
@@ -439,7 +460,11 @@ func (c *UdpTransport) udpCopy(srcConn, dstConn *net.UDPConn, port int) {
 				c.logger.Debug("read from UDP timed out")
 				return // Exit on timeout
 			}
-			c.logger.Errorf("failed to read from UDP: %v", err)
+			if c.ctx.Err() != nil || errors.Is(err, net.ErrClosed) {
+				c.logger.Debug("UDP connection closed")
+			} else {
+				c.logger.Errorf("failed to read from UDP: %v", err)
+			}
 			return
 		}
 
