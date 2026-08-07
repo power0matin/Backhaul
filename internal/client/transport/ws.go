@@ -26,7 +26,7 @@ type WsTransport struct {
 	cancel          context.CancelFunc
 	logger          *logrus.Logger
 	controlChannel  *websocket.Conn
-	restartMutex    sync.Mutex
+	restartOnce     sync.Once
 	usageMonitor    *web.Usage
 	poolConnections int32
 	loadConnections int32
@@ -36,17 +36,21 @@ type WsConfig struct {
 	RemoteAddr     string
 	Token          string
 	SnifferLog     string
-	TunnelStatus   string
+	WebBindAddr    string
+	WebUsername    string
+	WebPassword    string
 	Nodelay        bool
 	Sniffer        bool
 	KeepAlive      time.Duration
 	RetryInterval  time.Duration
 	DialTimeOut    time.Duration
 	ConnPoolSize   int
+	MaxPoolSize    int
 	WebPort        int
 	Mode           config.TransportType
 	AggressivePool bool
 	EdgeIP         string
+	TLSVerify      bool
 }
 
 func NewWSClient(parentCtx context.Context, config *WsConfig, logger *logrus.Logger) *WsTransport {
@@ -61,7 +65,7 @@ func NewWSClient(parentCtx context.Context, config *WsConfig, logger *logrus.Log
 		cancel:          cancel,
 		logger:          logger,
 		controlChannel:  nil, // will be set when a control connection is established
-		usageMonitor:    web.NewDataStore(fmt.Sprintf(":%v", config.WebPort), ctx, config.SnifferLog, config.Sniffer, &config.TunnelStatus, logger),
+		usageMonitor:    web.NewDataStore(config.WebBindAddr, config.WebPort, ctx, config.SnifferLog, config.Sniffer, fmt.Sprintf("Disconnected (%s)", config.Mode), config.WebUsername, config.WebPassword, logger),
 		poolConnections: 0,
 		loadConnections: 0,
 		controlFlow:     make(chan struct{}, 100),
@@ -76,51 +80,29 @@ func (c *WsTransport) Start() {
 		go c.usageMonitor.Monitor()
 	}
 
-	c.config.TunnelStatus = fmt.Sprintf("Disconnected (%s)", c.config.Mode)
+	c.usageMonitor.SetTunnelStatus(fmt.Sprintf("Disconnected (%s)", c.config.Mode))
 
 	go c.channelDialer()
 
 }
 func (c *WsTransport) Restart() {
-	if !c.restartMutex.TryLock() {
-		c.logger.Warn("client is already restarting")
-		return
-	}
-	defer c.restartMutex.Unlock()
-
-	c.logger.Info("restarting client...")
-
-	// for removing timeout logs
-	level := c.logger.Level
-	c.logger.SetLevel(logrus.FatalLevel)
-
-	if c.cancel != nil {
+	c.restartOnce.Do(func() {
+		if c.parentctx.Err() != nil {
+			return
+		}
+		c.usageMonitor.RecordReconnect()
+		c.logger.Info("restarting client...")
 		c.cancel()
-	}
-
-	// close control channel connection
-	if c.controlChannel != nil {
-		c.controlChannel.Close()
-	}
-
-	time.Sleep(2 * time.Second)
-
-	ctx, cancel := context.WithCancel(c.parentctx)
-	c.ctx = ctx
-	c.cancel = cancel
-
-	// Re-initialize variables
-	c.controlChannel = nil
-	c.usageMonitor = web.NewDataStore(fmt.Sprintf(":%v", c.config.WebPort), ctx, c.config.SnifferLog, c.config.Sniffer, &c.config.TunnelStatus, c.logger)
-	c.config.TunnelStatus = ""
-	c.poolConnections = 0
-	c.loadConnections = 0
-	c.controlFlow = make(chan struct{}, 100)
-
-	// set the log level again
-	c.logger.SetLevel(level)
-
-	go c.Start()
+		if c.controlChannel != nil {
+			_ = c.controlChannel.Close()
+		}
+		if !utils.WaitForDelay(c.parentctx, 2*time.Second) {
+			return
+		}
+		next := NewWSClient(c.parentctx, c.config, c.logger)
+		next.usageMonitor.InheritRuntimeMetrics(c.usageMonitor)
+		go next.Start()
+	})
 }
 
 func (c *WsTransport) channelDialer() {
@@ -131,16 +113,21 @@ func (c *WsTransport) channelDialer() {
 		case <-c.ctx.Done():
 			return
 		default:
-			tunnelWSConn, err := network.WebSocketDialer(c.ctx, c.config.RemoteAddr, c.config.EdgeIP, "/channel", c.config.DialTimeOut, c.config.KeepAlive, true, c.config.Token, c.config.Mode, 3, 0, 0)
+			tunnelWSConn, err := network.WebSocketDialer(c.ctx, c.config.RemoteAddr, c.config.EdgeIP, "/channel", c.config.DialTimeOut, c.config.KeepAlive, true, c.config.Token, c.config.Mode, c.config.TLSVerify, 3, 0, 0)
 			if err != nil {
+				if c.ctx.Err() != nil {
+					return
+				}
 				c.logger.Errorf("control channel dialer: %v", err)
-				time.Sleep(c.config.RetryInterval)
+				if !utils.WaitForDelay(c.ctx, c.config.RetryInterval) {
+					return
+				}
 				continue
 			}
 			c.controlChannel = tunnelWSConn
 			c.logger.Info("control channel established successfully")
 
-			c.config.TunnelStatus = fmt.Sprintf("Connected (%s)", c.config.Mode)
+			c.usageMonitor.SetTunnelStatus(fmt.Sprintf("Connected (%s)", c.config.Mode))
 
 			go c.poolMaintainer()
 			go c.channelHandler()
@@ -185,7 +172,9 @@ func (c *WsTransport) poolMaintainer() {
 
 		case <-tickerPool.C:
 			// Accumulate pool connections over time (every second)
-			atomic.AddInt32(&poolConnectionsSum, atomic.LoadInt32(&c.poolConnections))
+			poolConnections := atomic.LoadInt32(&c.poolConnections)
+			c.usageMonitor.SetPoolConnections(int64(poolConnections))
+			atomic.AddInt32(&poolConnectionsSum, poolConnections)
 
 		case <-tickerLoad.C:
 			// Calculate the loadConnections over the last 10 seconds
@@ -197,7 +186,7 @@ func (c *WsTransport) poolMaintainer() {
 			atomic.StoreInt32(&poolConnectionsSum, 0)                                   // Reset
 
 			// Dynamically adjust the pool size based on current connections
-			if (loadConnections + a) > poolConnectionsAvg*b {
+			if (loadConnections+a) > poolConnectionsAvg*b && newPoolSize < c.config.MaxPoolSize {
 				c.logger.Debugf("increasing pool size: %d -> %d, avg pool conn: %d, avg load conn: %d", newPoolSize, newPoolSize+1, poolConnectionsAvg, loadConnections)
 				newPoolSize++
 
@@ -208,7 +197,10 @@ func (c *WsTransport) poolMaintainer() {
 				newPoolSize--
 
 				// send a signal to controlFlow
-				c.controlFlow <- struct{}{}
+				select {
+				case c.controlFlow <- struct{}{}:
+				default:
+				}
 			}
 		}
 	}
@@ -216,6 +208,10 @@ func (c *WsTransport) poolMaintainer() {
 }
 
 func (c *WsTransport) channelHandler() {
+	control := c.controlChannel
+	defer control.Close()
+	stopControlClose := context.AfterFunc(c.ctx, func() { _ = control.Close() })
+	defer stopControlClose()
 	msgChan := make(chan byte, 1000)
 
 	// Goroutine to handle the blocking ReceiveBinaryString
@@ -226,16 +222,24 @@ func (c *WsTransport) channelHandler() {
 				return
 
 			default:
-				_, msg, err := c.controlChannel.ReadMessage()
+				_, msg, err := control.ReadMessage()
 				if err != nil {
-					if c.cancel != nil {
-						c.logger.Error("failed to read from channel connection. ", err)
+					if c.ctx.Err() == nil {
+						c.logger.Warn("control channel closed; reconnecting: ", err)
 						go c.Restart()
 					}
 					return
 				}
-
-				msgChan <- msg[0]
+				if len(msg) != 1 {
+					c.logger.Warnf("invalid control message length %d; restarting", len(msg))
+					go c.Restart()
+					return
+				}
+				select {
+				case msgChan <- msg[0]:
+				case <-c.ctx.Done():
+					return
+				}
 			}
 		}
 	}()
@@ -244,7 +248,7 @@ func (c *WsTransport) channelHandler() {
 	for {
 		select {
 		case <-c.ctx.Done():
-			_ = c.controlChannel.WriteMessage(websocket.BinaryMessage, []byte{utils.SG_Closed})
+			_ = control.WriteMessage(websocket.BinaryMessage, []byte{utils.SG_Closed})
 			return
 
 		case msg := <-msgChan:
@@ -262,7 +266,7 @@ func (c *WsTransport) channelHandler() {
 			case utils.SG_HB:
 				c.logger.Debug("heartbeat signal received successfully")
 				// send heartbeat back
-				err := c.controlChannel.WriteMessage(websocket.BinaryMessage, []byte{utils.SG_HB})
+				err := control.WriteMessage(websocket.BinaryMessage, []byte{utils.SG_HB})
 				if err != nil {
 					c.logger.Errorf("failed to send heartbeat: %v", msg)
 					go c.Restart()
@@ -288,12 +292,18 @@ func (c *WsTransport) tunnelDialer() {
 	c.logger.Debugf("initiating new websocket tunnel connection to address %s", c.config.RemoteAddr)
 
 	// Dial to the tunnel server
-	tunnelConn, err := network.WebSocketDialer(c.ctx, c.config.RemoteAddr, c.config.EdgeIP, "/tunnel", c.config.DialTimeOut, c.config.KeepAlive, c.config.Nodelay, c.config.Token, c.config.Mode, 3, 1024*1024, 1024*1024)
+	tunnelConn, err := network.WebSocketDialer(c.ctx, c.config.RemoteAddr, c.config.EdgeIP, "/tunnel", c.config.DialTimeOut, c.config.KeepAlive, c.config.Nodelay, c.config.Token, c.config.Mode, c.config.TLSVerify, 3, 1024*1024, 1024*1024)
 	if err != nil {
+		if c.ctx.Err() != nil {
+			return
+		}
 		c.logger.Errorf("tunnel server dialer: %v", err)
 
 		return
 	}
+	stopClose := context.AfterFunc(c.ctx, func() { _ = tunnelConn.Close() })
+	defer stopClose()
+	defer tunnelConn.Close()
 
 	// Increment active connections counter
 	atomic.AddInt32(&c.poolConnections, 1)

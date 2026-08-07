@@ -2,20 +2,26 @@ package web
 
 import (
 	"context"
+	"crypto/sha256"
+	"crypto/subtle"
 	"embed"
 	"encoding/json"
 	"fmt"
 	"html/template"
+	stdnet "net"
 	"net/http"
 	"os"
+	"runtime"
 	"sort"
+	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/shirou/gopsutil/v4/cpu"
 	"github.com/shirou/gopsutil/v4/disk"
 	"github.com/shirou/gopsutil/v4/mem"
-	"github.com/shirou/gopsutil/v4/net"
+	gnet "github.com/shirou/gopsutil/v4/net"
 
 	"github.com/sirupsen/logrus"
 )
@@ -24,14 +30,31 @@ type Usage struct {
 	dataStore    sync.Map
 	listenAddr   string
 	shutdownCtx  context.Context
-	cancelFunc   context.CancelFunc
 	server       *http.Server
 	logger       *logrus.Logger
 	sniffer      bool
 	snifferLog   string
+	webUsername  string
+	webPassword  string
 	mu           sync.Mutex
-	totalTraffic uint64
-	tunnelStatus *string
+	saveMu       sync.Mutex
+	totalTraffic atomic.Uint64
+	tunnelStatus atomic.Value
+	runtime      *RuntimeMetrics
+	statsMu      sync.Mutex
+	cachedStats  *SystemStats
+	cachedAt     time.Time
+	previousNet  *gnet.IOCountersStat
+	previousAt   time.Time
+}
+
+type RuntimeMetrics struct {
+	startedAt         time.Time
+	activeConnections atomic.Int64
+	poolConnections   atomic.Int64
+	reconnects        atomic.Uint64
+	rejected          atomic.Uint64
+	lastRejectedLog   atomic.Int64
 }
 
 type PortUsage struct {
@@ -40,33 +63,91 @@ type PortUsage struct {
 }
 
 type SystemStats struct {
-	TunnelStatus    string `json:"tunnelStatus"`
-	CPUUsage        string `json:"cpuUsage"`
-	RAMUsage        string `json:"ramUsage"`
-	DiskUsage       string `json:"diskUsage"`
-	SwapUsage       string `json:"swapUsage"`
-	NetworkTraffic  string `json:"networkTraffic"`
-	UploadSpeed     string `json:"uploadSpeed"`
-	DownloadSpeed   string `json:"downloadSpeed"`
-	BackhaulTraffic string `json:"backhaulTraffic"`
-	Sniffer         string `json:"sniffer"`
-	AllConnections  string `json:"allConnections"`
+	TunnelStatus      string `json:"tunnelStatus"`
+	CPUUsage          string `json:"cpuUsage"`
+	RAMUsage          string `json:"ramUsage"`
+	DiskUsage         string `json:"diskUsage"`
+	SwapUsage         string `json:"swapUsage"`
+	NetworkTraffic    string `json:"networkTraffic"`
+	UploadSpeed       string `json:"uploadSpeed"`
+	DownloadSpeed     string `json:"downloadSpeed"`
+	BackhaulTraffic   string `json:"backhaulTraffic"`
+	Sniffer           string `json:"sniffer"`
+	AllConnections    string `json:"allConnections"`
+	Uptime            string `json:"uptime"`
+	Goroutines        int    `json:"goroutines"`
+	HeapAlloc         string `json:"heapAlloc"`
+	ActiveConnections int64  `json:"activeConnections"`
+	PoolConnections   int64  `json:"poolConnections"`
+	Reconnects        uint64 `json:"reconnects"`
+	Rejected          uint64 `json:"rejected"`
 }
 
-func NewDataStore(listenAddr string, shutdownCtx context.Context, snifferLog string, sniffer bool, tunnelStatus *string, logger *logrus.Logger) *Usage {
-	ctx, cancel := context.WithCancel(shutdownCtx)
+func NewDataStore(bindAddr string, webPort int, shutdownCtx context.Context, snifferLog string, sniffer bool, tunnelStatus, webUsername, webPassword string, logger *logrus.Logger) *Usage {
 	u := &Usage{
-		listenAddr:   listenAddr,
-		shutdownCtx:  ctx,
-		cancelFunc:   cancel,
-		logger:       logger,
-		sniffer:      sniffer,
-		snifferLog:   snifferLog,
-		tunnelStatus: tunnelStatus,
-		mu:           sync.Mutex{},
-		totalTraffic: 0,
+		listenAddr:  stdnet.JoinHostPort(bindAddr, strconv.Itoa(webPort)),
+		shutdownCtx: shutdownCtx,
+		logger:      logger,
+		sniffer:     sniffer,
+		snifferLog:  snifferLog,
+		webUsername: webUsername,
+		webPassword: webPassword,
+		mu:          sync.Mutex{},
+		runtime:     &RuntimeMetrics{startedAt: time.Now()},
 	}
+	u.tunnelStatus.Store(tunnelStatus)
 	return u
+}
+
+// SetTunnelStatus publishes transport lifecycle state without racing the web
+// monitor. atomic.Value is used because status reads are frequent and tiny.
+func (m *Usage) SetTunnelStatus(status string) {
+	m.tunnelStatus.Store(status)
+}
+
+func (m *Usage) TunnelStatus() string {
+	status, _ := m.tunnelStatus.Load().(string)
+	return status
+}
+
+// InheritRuntimeMetrics keeps counters and uptime continuous across an
+// automatic transport reconnect while the previous monitor shuts down.
+func (m *Usage) InheritRuntimeMetrics(previous *Usage) {
+	if previous != nil && previous.runtime != nil {
+		m.runtime = previous.runtime
+	}
+}
+
+func (m *Usage) ConnectionOpened() {
+	m.runtime.activeConnections.Add(1)
+}
+
+func (m *Usage) ConnectionClosed() {
+	m.runtime.activeConnections.Add(-1)
+}
+
+func (m *Usage) SetPoolConnections(count int64) {
+	m.runtime.poolConnections.Store(count)
+}
+
+func (m *Usage) RecordReconnect() {
+	m.runtime.reconnects.Add(1)
+}
+
+// RecordRejected returns a cumulative count and whether the caller should log
+// this event. Overload warnings are limited to one every five seconds.
+func (m *Usage) RecordRejected() (uint64, bool) {
+	total := m.runtime.rejected.Add(1)
+	now := time.Now().UnixNano()
+	for {
+		previous := m.runtime.lastRejectedLog.Load()
+		if previous != 0 && now-previous < int64(5*time.Second) {
+			return total, false
+		}
+		if m.runtime.lastRejectedLog.CompareAndSwap(previous, now) {
+			return total, true
+		}
+	}
 }
 
 func (m *Usage) Monitor() {
@@ -77,12 +158,19 @@ func (m *Usage) Monitor() {
 		mux.HandleFunc("/data", m.handleData) // New route for JSON data
 	}
 	m.server = &http.Server{
-		Addr:    m.listenAddr,
-		Handler: mux,
+		Addr:              m.listenAddr,
+		Handler:           m.authenticated(mux),
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      15 * time.Second,
+		IdleTimeout:       60 * time.Second,
 	}
 
 	go func() {
 		<-m.shutdownCtx.Done()
+		if m.sniffer {
+			m.saveUsageData()
+		}
 
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
@@ -95,14 +183,15 @@ func (m *Usage) Monitor() {
 
 	// start save data
 	if m.sniffer {
+		m.loadPersistedTraffic()
 		go func() {
-			ticker := time.NewTicker(15 * time.Second) // every 5 seconds
+			ticker := time.NewTicker(15 * time.Second)
 			defer ticker.Stop()
 
 			for {
 				select {
 				case <-ticker.C:
-					go m.saveUsageData()
+					m.saveUsageData()
 				case <-m.shutdownCtx.Done():
 					return
 				}
@@ -114,6 +203,28 @@ func (m *Usage) Monitor() {
 	if err := m.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		m.logger.Errorf("sniffer server error: %v", err)
 	}
+}
+
+func (m *Usage) authenticated(next http.Handler) http.Handler {
+	if m.webUsername == "" && m.webPassword == "" {
+		return next
+	}
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		username, password, ok := r.BasicAuth()
+		userHash := sha256.Sum256([]byte(username))
+		expectedUserHash := sha256.Sum256([]byte(m.webUsername))
+		passwordHash := sha256.Sum256([]byte(password))
+		expectedPasswordHash := sha256.Sum256([]byte(m.webPassword))
+		userOK := subtle.ConstantTimeCompare(userHash[:], expectedUserHash[:]) == 1
+		passOK := subtle.ConstantTimeCompare(passwordHash[:], expectedPasswordHash[:]) == 1
+		if !ok || !userOK || !passOK {
+			w.Header().Set("WWW-Authenticate", `Basic realm="Backhaul monitor", charset="UTF-8"`)
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 //go:embed index.html
@@ -173,9 +284,13 @@ func (m *Usage) AddOrUpdatePort(port int, usage uint64) {
 		// Port does not exist, create new entry
 		m.dataStore.Store(port, PortUsage{Port: port, Usage: usage})
 	}
+	m.totalTraffic.Add(usage)
 }
 
 func (m *Usage) saveUsageData() {
+	m.saveMu.Lock()
+	defer m.saveMu.Unlock()
+
 	// Step 1: Load existing usage data from the JSON file
 	var existingUsageData []PortUsage
 	file, err := os.Open(m.snifferLog)
@@ -216,13 +331,10 @@ func (m *Usage) saveUsageData() {
 		}
 	}
 
-	m.totalTraffic = 0
-
 	// Step 4: Convert the map back to a slice
 	var mergedUsageData []PortUsage
 	for _, usage := range usageMap {
 		mergedUsageData = append(mergedUsageData, usage)
-		m.totalTraffic += usage.Usage
 	}
 
 	// Step 5: Convert merged data to JSON
@@ -233,26 +345,63 @@ func (m *Usage) saveUsageData() {
 	}
 
 	// Step 6: Write JSON data to file
-	err = os.WriteFile(m.snifferLog, data, 0644)
+	err = os.WriteFile(m.snifferLog, data, 0600)
 	if err != nil {
+		m.restoreUsageData(currentUsageData)
 		m.logger.Errorf("error writing usage data to file: %v", err)
 	}
 }
 
+func (m *Usage) restoreUsageData(usageData []PortUsage) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, usage := range usageData {
+		value, ok := m.dataStore.Load(usage.Port)
+		if ok {
+			current := value.(PortUsage)
+			usage.Usage += current.Usage
+		}
+		m.dataStore.Store(usage.Port, usage)
+	}
+}
+
+func (m *Usage) loadPersistedTraffic() {
+	m.saveMu.Lock()
+	defer m.saveMu.Unlock()
+
+	file, err := os.Open(m.snifferLog)
+	if err != nil {
+		return
+	}
+	defer file.Close()
+
+	var persisted []PortUsage
+	if err := json.NewDecoder(file).Decode(&persisted); err != nil {
+		return
+	}
+	for _, usage := range persisted {
+		m.totalTraffic.Add(usage.Usage)
+	}
+}
+
 func (m *Usage) getUsageFromFile() []PortUsage {
+	m.saveMu.Lock()
+	defer m.saveMu.Unlock()
+
 	// Check if the file exists
 	if _, err := os.Stat(m.snifferLog); os.IsNotExist(err) {
 		// If the file does not exist, create it and write "null"
-		file, err := os.OpenFile(m.snifferLog, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0644)
+		file, err := os.OpenFile(m.snifferLog, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0600)
 		if err != nil {
 			m.logger.Errorf("error creating file: %v", err)
 			return nil
 		}
 
-		// Write "null" to the new file
-		if _, err := file.Write([]byte("null")); err != nil {
+		defer file.Close()
+		// Use an empty array so a newly-created log has the same JSON shape as a
+		// populated usage log.
+		if _, err := file.Write([]byte("[]")); err != nil {
 			m.logger.Errorf("error writing 'null' to the file: %v", err)
-			file.Close()
 			return nil
 		}
 
@@ -347,18 +496,16 @@ func (m *Usage) convertBytesToReadable(bytes uint64) string {
 }
 
 func (m *Usage) getSystemStats() (*SystemStats, error) {
+	m.statsMu.Lock()
+	defer m.statsMu.Unlock()
 
-	// Get initial network stats
-	initialStats, err := m.getNetworkStats()
-	if err != nil {
-		return nil, err
+	now := time.Now()
+	if m.cachedStats != nil && now.Sub(m.cachedAt) < time.Second {
+		copy := *m.cachedStats
+		return &copy, nil
 	}
 
-	// Wait for 1 second
-	time.Sleep(1 * time.Second)
-
-	// Get updated network stats
-	finalStats, err := m.getNetworkStats()
+	currentNet, err := m.getNetworkStats()
 	if err != nil {
 		return nil, err
 	}
@@ -387,37 +534,57 @@ func (m *Usage) getSystemStats() (*SystemStats, error) {
 		return nil, err
 	}
 
-	// Get Network traffic
-	netStats, err := net.IOCounters(false)
-	if err != nil {
-		return nil, err
-	}
-
 	// Get all active network connections (TCP, UDP, etc.)
-	connections, err := net.Connections("all")
+	connections, err := gnet.Connections("all")
 	if err != nil {
 		return nil, err
 	}
 
-	// Calculate upload and download speeds
-	uploadSpeed := float64(finalStats.BytesSent - initialStats.BytesSent)
-	downloadSpeed := float64(finalStats.BytesRecv - initialStats.BytesRecv)
+	var uploadSpeed, downloadSpeed float64
+	if m.previousNet != nil {
+		elapsed := now.Sub(m.previousAt).Seconds()
+		if elapsed > 0 {
+			uploadSpeed = float64(currentNet.BytesSent-m.previousNet.BytesSent) / elapsed
+			downloadSpeed = float64(currentNet.BytesRecv-m.previousNet.BytesRecv) / elapsed
+		}
+	}
+	netCopy := *currentNet
+	m.previousNet = &netCopy
+	m.previousAt = now
+
+	var runtimeStats runtime.MemStats
+	runtime.ReadMemStats(&runtimeStats)
+	status, _ := m.tunnelStatus.Load().(string)
+	cpuUsage := float64(0)
+	if len(cpuPercent) > 0 {
+		cpuUsage = cpuPercent[0]
+	}
 
 	stats := &SystemStats{
-		TunnelStatus:    *m.tunnelStatus,
-		CPUUsage:        m.formatFloat(cpuPercent[0]),
-		RAMUsage:        m.convertBytesToReadable(memStats.Used),
-		DiskUsage:       m.convertBytesToReadable(diskStats.Used),
-		SwapUsage:       m.convertBytesToReadable(swapStats.Used),
-		NetworkTraffic:  m.convertBytesToReadable(netStats[0].BytesSent + netStats[0].BytesRecv),
-		DownloadSpeed:   m.formatSpeed(downloadSpeed),
-		UploadSpeed:     m.formatSpeed(uploadSpeed),
-		BackhaulTraffic: m.convertBytesToReadable(m.totalTraffic),
-		Sniffer:         map[bool]string{true: "Running", false: "Not running"}[m.sniffer],
-		AllConnections:  fmt.Sprintf("%d", len(connections)),
+		TunnelStatus:      status,
+		CPUUsage:          m.formatFloat(cpuUsage),
+		RAMUsage:          m.convertBytesToReadable(memStats.Used),
+		DiskUsage:         m.convertBytesToReadable(diskStats.Used),
+		SwapUsage:         m.convertBytesToReadable(swapStats.Used),
+		NetworkTraffic:    m.convertBytesToReadable(currentNet.BytesSent + currentNet.BytesRecv),
+		DownloadSpeed:     m.formatSpeed(downloadSpeed),
+		UploadSpeed:       m.formatSpeed(uploadSpeed),
+		BackhaulTraffic:   m.convertBytesToReadable(m.totalTraffic.Load()),
+		Sniffer:           map[bool]string{true: "Running", false: "Not running"}[m.sniffer],
+		AllConnections:    fmt.Sprintf("%d", len(connections)),
+		Uptime:            time.Since(m.runtime.startedAt).Round(time.Second).String(),
+		Goroutines:        runtime.NumGoroutine(),
+		HeapAlloc:         m.convertBytesToReadable(runtimeStats.HeapAlloc),
+		ActiveConnections: m.runtime.activeConnections.Load(),
+		PoolConnections:   m.runtime.poolConnections.Load(),
+		Reconnects:        m.runtime.reconnects.Load(),
+		Rejected:          m.runtime.rejected.Load(),
 	}
 
-	return stats, nil
+	m.cachedStats = stats
+	m.cachedAt = now
+	copy := *stats
+	return &copy, nil
 }
 
 func (m *Usage) formatSpeed(bytesPerSec float64) string {
@@ -435,8 +602,8 @@ func (m *Usage) formatFloat(value float64) string {
 	return fmt.Sprintf("%.2f%%", value)
 }
 
-func (m *Usage) getNetworkStats() (*net.IOCountersStat, error) {
-	ioCounters, err := net.IOCounters(false)
+func (m *Usage) getNetworkStats() (*gnet.IOCountersStat, error) {
+	ioCounters, err := gnet.IOCounters(false)
 	if err != nil {
 		return nil, err
 	}

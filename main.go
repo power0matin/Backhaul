@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -11,98 +12,131 @@ import (
 	"time"
 
 	"github.com/musix/backhaul/cmd"
+	"github.com/musix/backhaul/config"
 	"github.com/musix/backhaul/internal/utils"
 )
 
-var (
-	logger     = utils.NewLogger("info")
-	configPath *string
-	ctx        context.Context
-	cancel     context.CancelFunc
+var logger = utils.NewLogger("info")
+
+const (
+	version               = "v0.8.0"
+	reloadPollInterval    = 2 * time.Second
+	reloadShutdownTimeout = 5 * time.Second
 )
 
-// Define the version of the application
-const version = "v0.7.2"
-
 func main() {
-	configPath = flag.String("c", "", "path to the configuration file (TOML format)")
+	configPath := flag.String("c", "", "path to the configuration file (TOML format)")
 	showVersion := flag.Bool("v", false, "print the version and exit")
-
 	flag.Parse()
 
-	// If the version flag is provided, print the version and exit
 	if *showVersion {
 		fmt.Println(version)
-		os.Exit(0)
+		return
 	}
-
-	// Check if the configPath is provided
 	if *configPath == "" {
 		logger.Fatalf("Usage: %s -c /path/to/config.toml", flag.CommandLine.Name())
 	}
 
-	// Create a context for graceful shutdown handling
-	ctx, cancel = context.WithCancel(context.Background())
-
-	// Set up signal handling for graceful shutdown
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
-
-	go cmd.Run(*configPath, ctx)
-	go hotReload()
-
-	<-sigChan
-
-	cancel()
-
-	time.Sleep(1 * time.Second)
-}
-
-func hotReload() {
-	// Get initial modification time of the config file
-	lastModTime, err := getLastModTime(*configPath)
+	initialConfig, err := cmd.LoadConfig(*configPath)
 	if err != nil {
-		logger.Fatalf("Error getting modification time: %v", err)
+		logger.Fatalf("failed to load configuration: %v", err)
 	}
 
-	ticker := time.NewTicker(2 * time.Second)
+	rootCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	if err := supervise(rootCtx, *configPath, initialConfig); err != nil && !errors.Is(err, context.Canceled) {
+		logger.Fatalf("runtime stopped: %v", err)
+	}
+}
+
+// supervise owns configuration generations. A replacement is parsed and
+// validated before the running generation is canceled, so a partial/invalid
+// file write cannot take a healthy tunnel down during hot reload.
+func supervise(rootCtx context.Context, configPath string, initialConfig *config.Config) error {
+	lastModTime, err := getLastModTime(configPath)
+	if err != nil {
+		return fmt.Errorf("get config modification time: %w", err)
+	}
+
+	runCtx, cancelRun := context.WithCancel(rootCtx)
+	runDone := startGeneration(runCtx, initialConfig)
+
+	ticker := time.NewTicker(reloadPollInterval)
 	defer ticker.Stop()
 
 	for {
 		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			modTime, err := getLastModTime(*configPath)
+		case <-rootCtx.Done():
+			cancelRun()
+			return waitGeneration(runDone, reloadShutdownTimeout)
+
+		case err := <-runDone:
+			cancelRun()
 			if err != nil {
-				logger.Errorf("Error checking file modification time: %v", err)
+				return err
+			}
+			if rootCtx.Err() != nil {
+				return nil
+			}
+			return fmt.Errorf("configuration generation stopped unexpectedly")
+
+		case <-ticker.C:
+			modTime, err := getLastModTime(configPath)
+			if err != nil {
+				logger.Errorf("error checking config modification time: %v", err)
+				continue
+			}
+			if modTime.Equal(lastModTime) {
+				continue
+			}
+			lastModTime = modTime
+
+			nextConfig, err := cmd.LoadConfig(configPath)
+			if err != nil {
+				logger.Errorf("config changed but validation failed; keeping current generation: %v", err)
 				continue
 			}
 
-			// If the modification time has changed, reload the app
-			if modTime.After(lastModTime) {
-				logger.Info("Config file changed, reloading application")
-
-				// Cancel the previous context to stop the old running instance
-				cancel()
-
-				time.Sleep(2 * time.Second)
-
-				// Create a new context for the new instance
-				newCtx, newCancel := context.WithCancel(context.Background())
-				go cmd.Run(*configPath, newCtx)
-
-				// Update the last modification time and the context
-				lastModTime = modTime
-				ctx = newCtx
-				cancel = newCancel
+			logger.Info("config file changed; starting a validated replacement generation")
+			cancelRun()
+			if err := waitGeneration(runDone, reloadShutdownTimeout); err != nil {
+				return fmt.Errorf("stop previous configuration generation: %w", err)
 			}
+			if rootCtx.Err() != nil {
+				return nil
+			}
+
+			runCtx, cancelRun = context.WithCancel(rootCtx)
+			runDone = startGeneration(runCtx, nextConfig)
 		}
 	}
 }
 
+func startGeneration(ctx context.Context, cfg *config.Config) <-chan error {
+	done := make(chan error, 1)
+	go func() {
+		done <- cmd.RunConfig(cfg, ctx)
+	}()
+	return done
+}
+
+func waitGeneration(done <-chan error, timeout time.Duration) error {
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case err := <-done:
+		return err
+	case <-timer.C:
+		return fmt.Errorf("shutdown exceeded %s", timeout)
+	}
+}
+
 func getLastModTime(file string) (time.Time, error) {
-	absPath, _ := filepath.Abs(file)
+	absPath, err := filepath.Abs(file)
+	if err != nil {
+		return time.Time{}, err
+	}
 	fileInfo, err := os.Stat(absPath)
 	if err != nil {
 		return time.Time{}, err

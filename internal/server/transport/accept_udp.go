@@ -1,6 +1,7 @@
 package transport
 
 import (
+	"context"
 	"encoding/binary"
 	"io"
 	"net"
@@ -17,12 +18,14 @@ const BufferSize = 16 * 1024
 func (s *TcpTransport) udpListener(localAddr string, remoteAddr string) {
 	localUDPAddr, err := net.ResolveUDPAddr("udp", localAddr)
 	if err != nil {
-		s.logger.Fatalf("failed to resolve local address: %v", err)
+		s.logger.Errorf("failed to resolve local UDP forwarding address: %v", err)
+		return
 	}
 
 	listener, err := net.ListenUDP("udp", localUDPAddr)
 	if err != nil {
-		s.logger.Fatalf("failed to listen on local UDP port: %v", err)
+		s.logger.Errorf("failed to listen on local UDP forwarding port: %v", err)
+		return
 	}
 
 	defer listener.Close()
@@ -52,6 +55,9 @@ func (s *TcpTransport) udpListener(localAddr string, remoteAddr string) {
 			default:
 				n, addr, err := listener.ReadFromUDP(buf)
 				if err != nil {
+					if s.ctx.Err() != nil {
+						return
+					}
 					s.logger.Errorf("failed to read from UDP listener: %v", err)
 					continue
 				}
@@ -62,41 +68,46 @@ func (s *TcpTransport) udpListener(localAddr string, remoteAddr string) {
 				mu.Lock()
 				// Check if the connection is already active
 				if existingConn, exists := activeConnections[key]; exists {
-					if existingConn.IsCongested {
+					if existingConn.isCongested.Load() {
 						s.logger.Debugf("connection with timestamp %d congested. Removing %s from active connections due to network congestion", existingConn.timeCreated, addr.String())
 						// For congested connections, closing the payload channel immediately can cause abrupt TCP disconnection,
 						// potentially leading to data loss. Instead, allow the connection to keep transferring data for 30 more
 						// seconds (or until the payload channel becomes idle). The timer will close the TCP connection once it
 						// times out. Further testing is needed to confirm this strategy's effect on overall performance and congestion handling.
 
+						delete(activeConnections, key)
 					} else {
 						// If it exists, send the payload to the existing connection's payload channel
-						select {
-						case existingConn.payload <- append([]byte(nil), buf[:n]...): // Copy the packet to avoid data overwriting
+						if s.udpBudget.enqueueFramedUDP(existingConn.payload, buf[:n]) {
 							s.logger.Tracef("buffered %d bytes for existing connection %s", n, addr.String())
-
-						default:
-							s.logger.Warnf("payload channel for connection %s is full, dropping udp packet", addr.String())
+						} else {
+							recordRejected(s.usageMonitor, s.logger, "UDP per-flow queue full; dropping packet")
 						}
 						mu.Unlock()
 						continue
 					}
 				}
 
+				if len(activeConnections) >= udpMaxFlows(s.config.UDPMaxFlows) {
+					mu.Unlock()
+					recordRejected(s.usageMonitor, s.logger, "maximum UDP flow limit reached; dropping new flow")
+					continue
+				}
 				mu.Unlock()
 
-				// Create a new payload channel for this connection,  Buffer up to 100,0000 packets for the connection
-				// Generally affect the upload speed
-				payloadChan := make(chan []byte, 100_000)
+				payloadChan := make(chan []byte, udpQueueSize(s.config.UDPQueueSize))
+				if !s.udpBudget.enqueueFramedUDP(payloadChan, buf[:n]) {
+					recordRejected(s.usageMonitor, s.logger, "global UDP queue budget exhausted; dropping new flow")
+					continue
+				}
 
 				// build the UDP packet
 				newUDPConn := LocalAcceptUDPConn{
-					timeCreated: time.Now().UnixNano(), // Just for debugging
+					timeCreated: time.Now().UnixMilli(),
 					payload:     payloadChan,
 					remoteAddr:  remoteAddr,
 					listener:    listener,
 					clientAddr:  addr,
-					IsCongested: false,
 				}
 
 				mu.Lock()
@@ -107,16 +118,21 @@ func (s *TcpTransport) udpListener(localAddr string, remoteAddr string) {
 				select {
 				case udpChan <- &newUDPConn:
 					s.logger.Debugf("accepted UDP connection from %s", addr.String())
-					payloadChan <- append([]byte(nil), buf[:n]...) // send a copy of the new payload to the channel
 
 					select {
 					case s.reqNewConnChan <- struct{}{}: // Successfully requested a new tcp connection
 					default: // The channel is full, do nothing
-						s.logger.Warn("channel is full, cannot request a new connection")
+						recordRejected(s.usageMonitor, s.logger, "new tunnel request queue full; dropping request")
 					}
 
 				default:
-					s.logger.Warn("UDP channel is full, dropping packet.")
+					recordRejected(s.usageMonitor, s.logger, "UDP flow queue full; dropping new flow")
+					mu.Lock()
+					if current, ok := activeConnections[key]; ok && current == &newUDPConn {
+						delete(activeConnections, key)
+						s.udpBudget.closeQueue(newUDPConn.payload)
+					}
+					mu.Unlock()
 				}
 			}
 		}
@@ -131,13 +147,25 @@ func (s *TcpTransport) handleUDPLoop(udpChan chan *LocalAcceptUDPConn, activeCon
 		case <-s.ctx.Done():
 			return
 		case localConn := <-udpChan:
+			wait := 3*time.Second - time.Duration(time.Now().UnixMilli()-localConn.timeCreated)*time.Millisecond
+			if wait <= 0 {
+				s.removeAcceptUDPFlow(localConn, activeConnections, mu)
+				continue
+			}
+			timer := time.NewTimer(wait)
 		loop:
 			for {
 				select {
 				case <-s.ctx.Done():
+					timer.Stop()
 					return
+				case <-timer.C:
+					s.logger.Debugf("timed out queued UDP flow from %s", localConn.clientAddr.String())
+					s.removeAcceptUDPFlow(localConn, activeConnections, mu)
+					break loop
 
 				case tunnelConn := <-s.tunnelChannel:
+					timer.Stop()
 					// Send the target addr over the connection
 					if err := utils.SendBinaryTransportString(tunnelConn, localConn.remoteAddr, utils.SG_UDP); err != nil {
 						s.logger.Errorf("%v", err)
@@ -146,7 +174,7 @@ func (s *TcpTransport) handleUDPLoop(udpChan chan *LocalAcceptUDPConn, activeCon
 					}
 
 					// Handle data exchange between connections
-					go UDPConnectionHandler(localConn, tunnelConn, s.logger, s.usageMonitor, localConn.listener.LocalAddr().(*net.UDPAddr).Port, s.config.Sniffer, s.rtt, activeConnections, mu)
+					go UDPConnectionHandler(s.ctx, localConn, tunnelConn, s.logger, s.usageMonitor, localConn.listener.LocalAddr().(*net.UDPAddr).Port, s.config.Sniffer, s.rtt.Load(), activeConnections, mu, s.udpBudget)
 
 					s.logger.Debugf("initiate new handler for connection %s with timestamp %d", localConn.clientAddr.String(), localConn.timeCreated)
 					break loop
@@ -156,8 +184,24 @@ func (s *TcpTransport) handleUDPLoop(udpChan chan *LocalAcceptUDPConn, activeCon
 	}
 }
 
-func UDPConnectionHandler(udp *LocalAcceptUDPConn, tcp net.Conn, logger *logrus.Logger, usage *web.Usage, remotePort int, sniffer bool, rtt int64, activeConnections *map[string]*LocalAcceptUDPConn, mu *sync.Mutex) {
+func (s *TcpTransport) removeAcceptUDPFlow(udp *LocalAcceptUDPConn, activeConnections *map[string]*LocalAcceptUDPConn, mu *sync.Mutex) {
+	mu.Lock()
+	defer mu.Unlock()
+	key := udp.clientAddr.String()
+	if current, ok := (*activeConnections)[key]; ok && current == udp {
+		delete(*activeConnections, key)
+		s.udpBudget.closeQueue(udp.payload)
+	}
+}
+
+func UDPConnectionHandler(ctx context.Context, udp *LocalAcceptUDPConn, tcp net.Conn, logger *logrus.Logger, usage *web.Usage, remotePort int, sniffer bool, rtt int64, activeConnections *map[string]*LocalAcceptUDPConn, mu *sync.Mutex, budget *packetBudget) {
+	usage.ConnectionOpened()
+	defer usage.ConnectionClosed()
 	done := make(chan struct{})
+	flowCtx, cancelFlow := context.WithCancel(ctx)
+	defer cancelFlow()
+	stopClose := context.AfterFunc(ctx, func() { _ = tcp.Close() })
+	defer stopClose()
 
 	if rtt == 0 {
 		// RTT of 0 indicates that either the backhaul is running in a local environment
@@ -167,50 +211,49 @@ func UDPConnectionHandler(udp *LocalAcceptUDPConn, tcp net.Conn, logger *logrus.
 	}
 
 	go func() {
-		udpToTCP(tcp, udp, logger, usage, remotePort, sniffer)
+		udpToTCP(flowCtx, tcp, udp, logger, usage, remotePort, sniffer, budget)
 		tcp.Close()
 		done <- struct{}{}
 	}()
 
 	tcpToUDP(tcp, udp, logger, usage, remotePort, sniffer, rtt)
+	cancelFlow()
 	tcp.Close()
 
 	<-done
 
 	mu.Lock()
-	close(udp.payload)
-
-	if !udp.IsCongested {
-		delete(*activeConnections, udp.clientAddr.String())
+	budget.closeQueue(udp.payload)
+	key := udp.clientAddr.String()
+	// A congested flow can be replaced by the listener before this handler
+	// finishes. Remove our entry when it is still current, but never delete a
+	// newer replacement for the same source address.
+	if current, ok := (*activeConnections)[key]; ok && current == udp {
+		delete(*activeConnections, key)
 	}
 	mu.Unlock()
 }
 
-func udpToTCP(tcp net.Conn, udp *LocalAcceptUDPConn, logger *logrus.Logger, usage *web.Usage, remotePort int, sniffer bool) {
-	// Create a header (2 bytes) to hold the size of the data
-	header := make([]byte, 2)
-
+func udpToTCP(ctx context.Context, tcp net.Conn, udp *LocalAcceptUDPConn, logger *logrus.Logger, usage *web.Usage, remotePort int, sniffer bool, budget *packetBudget) {
 	inactivityTimeout := 60 * time.Second // Define a 60-second inactivity timeout
+	idleTimer := time.NewTimer(inactivityTimeout)
+	defer idleTimer.Stop()
 
 	for {
 		select {
-		case data, ok := <-udp.payload: // Wait for data on the UDP payload channel
+		case <-ctx.Done():
+			return
+		case packet, ok := <-udp.payload: // Wait for data on the UDP payload channel
 			if !ok {
 				return
 			}
+			budget.release()
 
-			packetSize := len(data) // Calculate the packet size (data length)
-
-			// the listener buffer size is 16KB, just for preventing bugs in the future!
-			if packetSize > 65535 { // Check for overflow, since 2 bytes can only store values up to 65535 ~ 64KB
-				logger.Errorf("packet too large to send, size: %d bytes", packetSize)
-				continue
+			if len(packet) < 2 {
+				logger.Error("invalid internally framed UDP packet")
+				return
 			}
-
-			binary.BigEndian.PutUint16(header, uint16(packetSize)) // Store the packet size at 2 bytes
-
-			// Prepend the header to the data
-			packet := append(header, data...)
+			packetSize := len(packet) - 2
 
 			totalWritten := 0
 			for totalWritten < len(packet) { // Use the total packet length (header + data)
@@ -227,8 +270,9 @@ func udpToTCP(tcp net.Conn, udp *LocalAcceptUDPConn, logger *logrus.Logger, usag
 			if sniffer {
 				usage.AddOrUpdatePort(remotePort, uint64(totalWritten))
 			}
+			resetTimer(idleTimer, inactivityTimeout)
 
-		case <-time.After(inactivityTimeout): // Timeout after 30 seconds of inactivity
+		case <-idleTimer.C:
 			logger.Debugf("connection with timestamp %d and address %s idle for 60 seconds, closing", udp.timeCreated, udp.clientAddr.String())
 			return
 		}
@@ -263,7 +307,7 @@ func tcpToUDP(tcp net.Conn, udp *LocalAcceptUDPConn, logger *logrus.Logger, usag
 
 		// If the packet age exceeds the threshold (3x RTT), flag the connection as congested
 		if packetAge > 3*rtt {
-			udp.IsCongested = true
+			udp.isCongested.Store(true)
 		}
 
 		// Read the 2-byte packet length header from the TCP connection

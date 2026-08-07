@@ -7,9 +7,10 @@ Welcome to the **`Backhaul`** project! This project provides a high-performance 
 ## Table of Contents
 
 1. [Introduction](#introduction)
-2. [Features](#features)
-3. [Installation](#installation)
-4. [Usage](#usage)
+2. [v0.8.0 production hardening](#v080-production-hardening)
+3. [Features](#features)
+4. [Installation](#installation)
+5. [Usage](#usage)
    - [Configuration Options](#configuration-options)
    - [Detailed Configuration](#detailed-configuration)
       - [TCP Configuration](#tcp-configuration)
@@ -19,12 +20,12 @@ Welcome to the **`Backhaul`** project! This project provides a high-performance 
       - [Secure WebSocket Configuration](#secure-websocket-configuration)
       - [WS Multiplexing Configuration](#ws-multiplexing-configuration)
       - [WSS Multiplexing Configuration](#wss-multiplexing-configuration)
-5. [Generating a Self-Signed TLS Certificate with OpenSSL](#generating-a-self-signed-tls-certificate-with-openssl)
-6. [Running backhaul as a service](#running-backhaul-as-a-service)
-7. [FAQ](#faq)
-8. [Benchmark](#benchmark)
-9. [License](#license)
-10. [Donation](#donation)
+6. [Generating a Self-Signed TLS Certificate with OpenSSL](#generating-a-self-signed-tls-certificate-with-openssl)
+7. [Running backhaul as a service](#running-backhaul-as-a-service)
+8. [FAQ](#faq)
+9. [Benchmark](#benchmark)
+10. [License](#license)
+11. [Donation](#donation)
 
 ---
 
@@ -32,6 +33,34 @@ Welcome to the **`Backhaul`** project! This project provides a high-performance 
 
 This project offers a robust reverse tunneling solution to overcome NAT and firewall restrictions, supporting various transport protocols. It’s engineered for high efficiency and concurrency.
 
+## v0.8.0 production hardening
+
+This fork is based on upstream v0.7.2 commit
+`df7966f8f725837a680ea7b90bd37ea52666c277`. The v0.8.0 work keeps the
+existing transports and wire framing while focusing on failure behavior:
+
+* UDP and `accept_udp` flow queues are bounded per flow and across the
+  transport. New defaults are `udp_queue_size = 64`,
+  `udp_queue_limit = 4096`, and `udp_max_flows = 2048`.
+* A full local TCP queue now applies up to 250 ms of bounded backpressure
+  before rejecting the connection. Rejections are counted and warning logs
+  are rate limited.
+* Transport reconnects use fresh lifecycle generations instead of reusing
+  canceled contexts/channels, and retry waits are cancellation-aware with
+  bounded jittered backoff.
+* Adaptive client pool growth is bounded by `max_pool_size`. If omitted, the
+  default is the larger of `connection_pool * 4` and
+  `connection_pool + 16`.
+* Configuration is validated before startup and before hot-reload replaces a
+  healthy generation. An invalid edited file is logged and the running
+  generation is kept.
+* The web monitor binds to `127.0.0.1` by default and can use HTTP Basic
+  authentication. pprof, when enabled, is loopback-only.
+* `/stats` includes active connections, pool utilization, reconnects,
+  rejected/dropped work, uptime, goroutine count, and Go live heap.
+
+See [PERFORMANCE.md](./PERFORMANCE.md) for the issue-by-issue audit,
+reproduction methodology, stress/soak results, and baseline comparison.
 
 ## Features
 
@@ -49,7 +78,7 @@ This project offers a robust reverse tunneling solution to overcome NAT and fire
 
 ## Installation
 
-1. **Download** the latest release from the [GitHub releases page](https://github.com/musixal/backhaul/releases).
+1. **Download** the latest release from the [fork releases page](https://github.com/power0matin/Backhaul/releases).
 2. **Extract** the archive (adjust the `filename` if needed):  
 
    ```bash
@@ -63,8 +92,8 @@ This project offers a robust reverse tunneling solution to overcome NAT and fire
 4. You can also build from source if preferred:  
 
    ```bash
-   git clone https://github.com/musixal/backhaul.git
-   cd backhaul
+   git clone https://github.com/power0matin/Backhaul.git
+   cd Backhaul
    go build
    ./backhaul
    ```
@@ -89,15 +118,18 @@ To start using the solution, you'll need to configure both server and client com
     token = "your_token"          # Authentication token for secure communication (optional).
     keepalive_period = 75         # Interval in seconds to send keep-alive packets.(optional, default: 75s)
     nodelay = false               # Enable TCP_NODELAY (optional, default: false).
-    channel_size = 2048           # Tunnel and Local channel size. Excess connections are discarded. (optional, default: 2048).
+    channel_size = 2048           # Bounded tunnel/local queue size. Brief saturation gets bounded backpressure; persistent overload is rejected. (optional, default: 2048).
     heartbeat = 40                # In seconds. Ping interval for tunnel stability. Min: 1s. (Optional, default: 40s)
     mux_con = 8                   # Mux concurrency. Number of connections that can be multiplexed into a single stream (optional, default: 8).
     mux_version = 1               # SMUX protocol version (1 or 2). Version 2 may have extra features. (optional)
     mux_framesize = 32768         # 32 KB. The maximum size of a frame that can be sent over a connection. (optional)
     mux_recievebuffer = 4194304   # 4 MB. The maximum buffer size for incoming data per connection. (optional)
-    mux_streambuffer = 65536      # 256 KB. The maximum buffer size per individual stream within a connection. (optional)
+    mux_streambuffer = 65536      # 64 KB. The maximum buffer size per individual stream within a connection. (optional)
     sniffer = false               # Enable or disable network sniffing for monitoring data. (optional, default false)
     web_port = 2060               # Port number for the web interface or monitoring interface. (optional, set to 0 to disable).
+    web_bind_addr = "127.0.0.1"   # Monitor bind address. Defaults to loopback in v0.8.0.
+    web_username = "operator"     # Optional HTTP Basic username; set username and password together.
+    web_password = "change-me"    # Optional HTTP Basic password.
     sniffer_log ="/root/log.json" # Filename used to store network traffic and usage data logs. (optional, default backhaul.json)
     tls_cert = "/root/server.crt" # Path to the TLS certificate file for wss/wssmux. (mandatory).
     tls_key = "/root/server.key"  # Path to the TLS private key file for wss/wssmux. (mandatory).
@@ -106,12 +138,15 @@ To start using the solution, you'll need to configure both server and client com
     mss = 1360                    # TCP/TCPMux: Maximum Segment Size in bytes; controls max TCP payload size to avoid fragmentation. (default: system-defined)
     so_rcvbuf = 4194304           # TCP/TCPMux: Socket receive buffer size (bytes); larger buffer allows higher throughput on receive side. (default: system-defined)
     so_sndbuf = 1048576           # TCP/TCPMux: Socket send buffer size (bytes); controls send queue size to manage outgoing data flow. (default: system-defined)
+    udp_queue_size = 64            # UDP/accept_udp queued packets per flow. (optional, default: 64)
+    udp_queue_limit = 4096         # UDP/accept_udp queued packets across all flows. (optional, default: 4096; max: 16384)
+    udp_max_flows = 2048           # Maximum simultaneously tracked UDP flows. (optional, default: 2048)
 
 
 
     ports = [
     "443-600",                  # Listen on all ports in the range 443 to 600
-    "443-600:5201",             # Listen on all ports in the range 443 to 600 and forward traffic to 5201
+    "443-600=5201",             # Listen on all ports in the range 443 to 600 and forward traffic to 5201
     "443-600=1.1.1.1:5201",     # Listen on all ports in the range 443 to 600 and forward traffic to 1.1.1.1:5201
     "443",                      # Listen on local port 443 and forward to remote port 443 (default forwarding).
     "4000=5000",                # Listen on local port 4000 (bind to all local IPs) and forward to remote port 5000.
@@ -137,6 +172,7 @@ To start using the solution, you'll need to configure both server and client com
    transport = "tcp"             # Protocol to use ("tcp", "tcpmux", "ws", "wss", "wsmux", "wssmux". mandatory).
    token = "your_token"          # Authentication token for secure communication (optional).
    connection_pool = 8           # Number of pre-established connections.(optional, default: 8).
+   max_pool_size = 32            # Upper bound for adaptive pool growth. If omitted, derived from connection_pool.
    aggressive_pool = false       # Enables aggressive connection pool management.(optional, default: false).
    keepalive_period = 75         # Interval in seconds to send keep-alive packets. (optional, default: 75s)
    nodelay = false               # Use TCP_NODELAY (optional, default: false).
@@ -148,12 +184,16 @@ To start using the solution, you'll need to configure both server and client com
    mux_streambuffer = 65536      # 256 KB. The maximum buffer size per individual stream within a connection. (optional)
    sniffer = false               # Enable or disable network sniffing for monitoring data. (optional, default false)
    web_port = 2060               # Port number for the web interface or monitoring interface. (optional, set to 0 to disable).
+   web_bind_addr = "127.0.0.1"   # Monitor bind address. Defaults to loopback in v0.8.0.
+   web_username = "operator"     # Optional HTTP Basic username; set both credentials together.
+   web_password = "change-me"    # Optional HTTP Basic password.
    sniffer_log ="/root/log.json" # Filename used to store network traffic and usage data logs. (optional, default backhaul.json)
    log_level = "info"            # Log level ("panic", "fatal", "error", "warn", "info", "debug", "trace", optional, default: "info").
    skip_optz = true              # Skip optimizations performed by Backhaul (default: false)
    mss = 1360                    # TCP/TCPMux: Maximum Segment Size in bytes; controls max TCP payload size to avoid fragmentation. (default: system-defined)
    so_rcvbuf = 1048576           # TCP/TCPMux: Socket receive buffer size (bytes); larger buffer allows higher throughput on receive side. (default: system-defined)
    so_sndbuf = 4194304           # TCP/TCPMux: Socket send buffer size (bytes); controls send queue size to manage outgoing data flow. (default: system-defined)
+   tls_verify = false             # WSS/WSSMUX only. Set true for normal CA/hostname verification; false preserves v0.7.2 self-signed behavior.
    ```
 
    To start the `client`:
@@ -210,8 +250,44 @@ To start using the solution, you'll need to configure both server and client com
    `channel_size`: The queue size for forwarding packets from server to the client. If the limit is exceeded, packets will be dropped.
 
    `connection_pool`: Set the number of pre-established connections for better latency.
+
+   `max_pool_size`: Hard ceiling for adaptive pool growth. This prevents
+   long-running load from increasing the pool without a bound.
    
    `nodelay`: Refers to a TCP socket option (TCP_NODELAY) that improve the latency but decrease the bandwidth
+
+### Monitoring and security
+
+When `web_port` is enabled, v0.8.0 listens on `127.0.0.1` by default.
+Existing installations that intentionally need remote access can set
+`web_bind_addr = "0.0.0.0"` (or another explicit interface). If the monitor
+is reachable from an untrusted network, set both `web_username` and
+`web_password` and put the HTTP monitor behind a TLS reverse proxy or access
+it through an SSH tunnel. Basic authentication by itself does not encrypt the
+credentials.
+
+`pprof = true` exposes the Go profiler only on `127.0.0.1:6060` (server) or
+`127.0.0.1:6061` (client). Configuration files contain the tunnel token and
+possibly monitor credentials; use restrictive permissions such as
+`chmod 600 config.toml`.
+
+For `wss` and `wssmux`, `tls_verify = false` remains the default so
+v0.7.2 deployments using self-signed certificates keep working. Prefer
+`tls_verify = true` when the server certificate chains to a CA trusted by the
+client and its hostname matches `remote_addr`.
+
+### v0.7.2 compatibility notes
+
+All v0.7.2 configuration field names and transport names are retained. TCP,
+TCPMUX, UDP, WS, WSS, WSMUX, and WSSMUX use the existing protocol framing.
+There are two intentional operational changes:
+
+* An enabled web monitor without `web_bind_addr` is now loopback-only. Set
+  `web_bind_addr = "0.0.0.0"` to restore the old all-interface binding.
+* Invalid values and malformed port mappings now fail configuration validation
+  instead of being accepted and failing later in a worker. Range forwarding
+  uses `"443-600=5201"`; the old README example
+  `"443-600:5201"` was not a format the implementation supported.
 
 
 #### TCP Multiplexing Configuration
@@ -583,7 +659,9 @@ journalctl -u backhaul.service -e -f
 
 ## Benchmark
 
-For in-depth information, please visit the dedicated [Benchmark page](./benchmark/).
+The reproducible v0.7.2 vs v0.8.0 methodology and results are in
+[PERFORMANCE.md](./PERFORMANCE.md). The files under [benchmark](./benchmark/)
+also contain the executable Go benchmark harness and legacy upstream results.
 
 
 ## License
@@ -600,4 +678,3 @@ Thanks for your support!
 
 ## Stargazers over time
 [![Stargazers over time](https://starchart.cc/Musixal/Backhaul.svg?variant=light)](https://starchart.cc/Musixal/Backhaul)
-

@@ -2,7 +2,9 @@ package transport
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
+	"errors"
 	"io"
 	"net"
 	"time"
@@ -13,30 +15,47 @@ import (
 
 const BufferSize = 16 * 1024
 
-func UDPDialer(tcp net.Conn, remoteAddr string, logger *logrus.Logger, usage *web.Usage, remotePort int, sniffer bool) {
+func UDPDialer(ctx context.Context, tcp net.Conn, remoteAddr string, logger *logrus.Logger, usage *web.Usage, remotePort int, sniffer bool) {
 	remoteUDPAddr, err := net.ResolveUDPAddr("udp", remoteAddr)
 	if err != nil {
-		logger.Fatalf("failed to resolve remote address: %v", err)
+		logger.Errorf("failed to resolve remote UDP address: %v", err)
+		return
 	}
 
 	// Dial the remote UDP server
 	remoteConn, err := net.DialUDP("udp", nil, remoteUDPAddr)
 	if err != nil {
-		logger.Fatalf("failed to dial remote UDP address: %v", err)
+		logger.Errorf("failed to dial remote UDP address: %v", err)
+		return
 	}
 
 	defer remoteConn.Close()
+	usage.ConnectionOpened()
+	defer usage.ConnectionClosed()
 
-	done := make(chan struct{})
+	done := make(chan struct{}, 2)
 
 	go func() {
-		go tcpToUDP(tcp, remoteConn, logger, usage, remotePort, sniffer)
+		tcpToUDP(tcp, remoteConn, logger, usage, remotePort, sniffer)
+		done <- struct{}{}
+	}()
+	go func() {
+		udpToTCP(tcp, remoteConn, logger, usage, remotePort, sniffer)
 		done <- struct{}{}
 	}()
 
-	udpToTCP(tcp, remoteConn, logger, usage, remotePort, sniffer)
-
-	<-done
+	completed := 0
+	select {
+	case <-ctx.Done():
+	case <-done:
+		completed = 1
+	}
+	_ = tcp.Close()
+	_ = remoteConn.Close()
+	for completed < 2 {
+		<-done
+		completed++
+	}
 }
 
 func tcpToUDP(tcp net.Conn, udp *net.UDPConn, logger *logrus.Logger, usage *web.Usage, remotePort int, sniffer bool) {
@@ -47,7 +66,7 @@ func tcpToUDP(tcp net.Conn, udp *net.UDPConn, logger *logrus.Logger, usage *web.
 		// First, read the 2-byte packet size header from TCP
 		_, err := io.ReadFull(tcp, lenBuf)
 		if err != nil {
-			if err == io.EOF {
+			if errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) {
 				logger.Debug("TCP connection closed by client.")
 			} else {
 				logger.Errorf("failed to read packet size from TCP: %v", err)
@@ -67,7 +86,11 @@ func tcpToUDP(tcp net.Conn, udp *net.UDPConn, logger *logrus.Logger, usage *web.
 		// Now read the actual packet data from TCP
 		_, err = io.ReadFull(tcp, buf[:packetSize])
 		if err != nil {
-			logger.Errorf("failed to read packet from TCP: %v", err)
+			if errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) {
+				logger.Debug("TCP connection closed while reading UDP packet")
+			} else {
+				logger.Errorf("failed to read packet from TCP: %v", err)
+			}
 			return
 		}
 
@@ -100,7 +123,11 @@ func udpToTCP(tcp net.Conn, udp *net.UDPConn, logger *logrus.Logger, usage *web.
 	for {
 		r, err := udp.Read(buf)
 		if err != nil {
-			logger.Errorf("failed to read from UDP connection: %v", err)
+			if errors.Is(err, net.ErrClosed) {
+				logger.Debug("UDP connection closed")
+			} else {
+				logger.Errorf("failed to read from UDP connection: %v", err)
+			}
 			return
 		}
 

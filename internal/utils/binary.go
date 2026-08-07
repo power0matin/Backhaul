@@ -10,6 +10,9 @@ import (
 func SendBinaryString(conn interface{}, message string) error {
 	// Header size
 	const headerSize = 2
+	if len(message) > int(^uint16(0)) {
+		return fmt.Errorf("message too large: %d bytes (maximum 65535)", len(message))
+	}
 
 	// Create a buffer with the appropriate size for the message
 	buf := make([]byte, headerSize+len(message))
@@ -22,8 +25,7 @@ func SendBinaryString(conn interface{}, message string) error {
 
 	switch c := conn.(type) {
 	case net.Conn:
-		// Send the buffer over the connection
-		if _, err := c.Write(buf); err != nil {
+		if err := writeFull(c, buf); err != nil {
 			return fmt.Errorf("failed to send message: %w", err)
 		}
 
@@ -76,6 +78,9 @@ func ReceiveBinaryString(conn interface{}) (string, error) {
 func SendBinaryTransportString(conn interface{}, message string, transport byte) error {
 	// Header size
 	const headerSize = 3
+	if len(message) > int(^uint16(0)) {
+		return fmt.Errorf("message too large: %d bytes (maximum 65535)", len(message))
+	}
 
 	// Create a buffer with the appropriate size for the message
 	buf := make([]byte, headerSize+len(message))
@@ -91,8 +96,7 @@ func SendBinaryTransportString(conn interface{}, message string, transport byte)
 
 	switch c := conn.(type) {
 	case net.Conn:
-		// Send the buffer over the connection
-		if _, err := c.Write(buf); err != nil {
+		if err := writeFull(c, buf); err != nil {
 			return fmt.Errorf("failed to send message: %w", err)
 		}
 
@@ -154,7 +158,7 @@ func SendBinaryInt(conn net.Conn, port uint16) error {
 	binary.BigEndian.PutUint16(buf, port)
 
 	// Send the 2-byte buffer over the connection
-	if _, err := conn.Write(buf); err != nil {
+	if err := writeFull(conn, buf); err != nil {
 		return fmt.Errorf("failed to send port number %d: %w", port, err)
 	}
 
@@ -182,7 +186,7 @@ func SendBinaryByte(conn interface{}, message byte) error {
 
 	switch c := conn.(type) {
 	case net.Conn:
-		if _, err := c.Write(messageBuf[:]); err != nil {
+		if err := writeFull(c, messageBuf[:]); err != nil {
 			return fmt.Errorf("failed to read message from net.Conn: %w", err)
 		}
 
@@ -191,6 +195,20 @@ func SendBinaryByte(conn interface{}, message byte) error {
 	}
 
 	// Successful
+	return nil
+}
+
+func writeFull(w io.Writer, buf []byte) error {
+	for len(buf) > 0 {
+		n, err := w.Write(buf)
+		if err != nil {
+			return err
+		}
+		if n <= 0 {
+			return io.ErrShortWrite
+		}
+		buf = buf[n:]
+	}
 	return nil
 }
 

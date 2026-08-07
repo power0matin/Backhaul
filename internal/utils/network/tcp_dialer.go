@@ -12,8 +12,10 @@ func TcpDialer(ctx context.Context, remoteAddress string, localSrc string, timeo
 	var tcpConn *net.TCPConn
 	var err error
 
-	retries := retry           // Number of retries
-	backoff := 1 * time.Second // Initial backoff duration
+	retries := retry
+	if retries < 1 {
+		retries = 1
+	}
 
 	for i := 0; i < retries; i++ {
 		// Attempt to establish a TCP connection
@@ -28,9 +30,9 @@ func TcpDialer(ctx context.Context, remoteAddress string, localSrc string, timeo
 			break
 		}
 
-		// Log retry attempt and wait before retrying
-		time.Sleep(backoff)
-		backoff *= 2 // Exponential backoff (double the wait time after each failure)
+		if !waitRetry(ctx, i) {
+			return nil, ctx.Err()
+		}
 	}
 
 	return nil, err
@@ -49,13 +51,8 @@ func attemptTcpDialer(
 	mss int,
 ) (*net.TCPConn, error) {
 
-	//Resolve the address to a TCP address
-	tcpAddr, err := net.ResolveTCPAddr("tcp", remoteAddress)
-	if err != nil {
-		return nil, fmt.Errorf("DNS resolution: %v", err)
-	}
-
 	var localTCPAddr *net.TCPAddr
+	var err error
 	if localSrc != "" {
 		localTCPAddr, err = net.ResolveTCPAddr("tcp", localSrc)
 		if err != nil {
@@ -108,7 +105,10 @@ func attemptTcpDialer(
 	}
 
 	// Dial the TCP connection with a timeout
-	conn, err := dialer.DialContext(ctx, "tcp", tcpAddr.String())
+	// Let DialContext perform DNS resolution so cancellation and dial_timeout
+	// also bound resolver work. Each retry resolves the hostname again, allowing
+	// recovery after DNS changes or a transient resolution failure.
+	conn, err := dialer.DialContext(ctx, "tcp", remoteAddress)
 	if err != nil {
 		return nil, err
 	}

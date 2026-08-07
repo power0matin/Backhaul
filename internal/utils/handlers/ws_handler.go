@@ -13,22 +13,26 @@ import (
 
 // WebSocketToTCPConnectionHandler handles data transfer between a WebSocket and a TCP connection
 func WSConnectionHandler(ctx context.Context, wsConn *websocket.Conn, tcpConn net.Conn, logger *logrus.Logger, usage *web.Usage, remotePort int, sniffer bool) {
-	done := make(chan struct{})
-
-	go func() {
-		defer close(done)
-		transferWebSocketToTCP(wsConn, tcpConn, logger, usage, remotePort, sniffer)
-	}()
-
-	transferTCPToWebSocket(tcpConn, wsConn, logger, usage, remotePort, sniffer)
-
-	select {
-	case <-ctx.Done():
-		wsConn.Close()
-		tcpConn.Close()
-		return
-	case <-done:
+	if usage != nil {
+		usage.ConnectionOpened()
+		defer usage.ConnectionClosed()
 	}
+	closeBoth := func() {
+		_ = wsConn.Close()
+		_ = tcpConn.Close()
+	}
+	stopCancel := context.AfterFunc(ctx, closeBoth)
+	defer stopCancel()
+
+	done := make(chan struct{}, 1)
+	go func() {
+		transferWebSocketToTCP(wsConn, tcpConn, logger, usage, remotePort, sniffer)
+		closeBoth()
+		done <- struct{}{}
+	}()
+	transferTCPToWebSocket(tcpConn, wsConn, logger, usage, remotePort, sniffer)
+	closeBoth()
+	<-done
 }
 
 // transferWebSocketToTCP transfers data from a WebSocket connection to a TCP connection
@@ -42,8 +46,6 @@ func transferWebSocketToTCP(wsConn *websocket.Conn, tcpConn net.Conn, logger *lo
 			} else {
 				logger.Trace("unable to read from the WebSocket connection: ", err)
 			}
-			wsConn.Close()
-			tcpConn.Close()
 			return
 		}
 
@@ -53,8 +55,6 @@ func transferWebSocketToTCP(wsConn *websocket.Conn, tcpConn net.Conn, logger *lo
 			w, err := tcpConn.Write(message)
 			if err != nil {
 				logger.Trace("unable to write to the TCP connection: ", err)
-				wsConn.Close()
-				tcpConn.Close()
 				return
 			}
 			logger.Tracef("transferred data from WebSocket to TCP: %d bytes", w)
@@ -77,8 +77,6 @@ func transferTCPToWebSocket(tcpConn net.Conn, wsConn *websocket.Conn, logger *lo
 			} else {
 				logger.Trace("unable to read from the TCP connection: ", err)
 			}
-			tcpConn.Close()
-			wsConn.Close()
 			return
 		}
 
@@ -90,8 +88,6 @@ func transferTCPToWebSocket(tcpConn net.Conn, wsConn *websocket.Conn, logger *lo
 			} else {
 				logger.Trace("unable to write to the WebSocket connection: ", err)
 			}
-			tcpConn.Close()
-			wsConn.Close()
 			return
 		}
 

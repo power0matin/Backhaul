@@ -1,39 +1,60 @@
-# If you prefer the allow list template instead of the deny list, see community template:
-# https://github.com/github/gitignore/blob/main/community/Golang/Go.AllowList.gitignore
-#
-# Binaries for programs and plugins
+# Build and release output
+/backhaul
+/bin/
+/dist/
+/backhaul_*.tar.gz
+/Backhaul-v*.tar.gz
+/checksums.txt
+
+# Go binaries, test binaries, and coverage output
 *.exe
 *.exe~
 *.dll
 *.so
 *.dylib
-
-# Test binary, built with `go test -c`
 *.test
-
-# Output of the go coverage tool, specifically when used with LiteIDE
 *.out
+*.coverprofile
 
-# Go workspace file
+# Profiling and debug output
+*.prof
+*.pprof
+*.trace
+/benchmark/*-overlay.json
+
+# Local Go workspace files
 go.work
 go.work.sum
 
-# env file
+# Local configuration and secrets
 .env
+.env.*
+!.env.example
+!.env.sample
+/config.toml
+/config-*.toml
+/*.local.toml
 
-# toml file
-*.toml
-
-# Makefile
-MakeFile
-
-#MacOS
-.DS_Store
-.vscode
-dist/
-
-# other
-*.json
-server.*
-backhaul
+# Runtime state and logs
 *.log
+*.pid
+*.sock
+/backhaul.json
+/backhaul-*.json
+
+# Temporary and backup files
+*.tmp
+*.bak
+*.orig
+*~
+
+# Editors and IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS metadata
+.DS_Store
+Thumbs.db
+Desktop.ini

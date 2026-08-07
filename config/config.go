@@ -31,6 +31,9 @@ type ServerConfig struct {
 	MaxStreamBuffer  int           `toml:"mux_streambuffer"`
 	Sniffer          bool          `toml:"sniffer"`
 	WebPort          int           `toml:"web_port"`
+	WebBindAddr      string        `toml:"web_bind_addr"`
+	WebUsername      string        `toml:"web_username"`
+	WebPassword      string        `toml:"web_password"`
 	SnifferLog       string        `toml:"sniffer_log"`
 	TLSCertFile      string        `toml:"tls_cert"`
 	TLSKeyFile       string        `toml:"tls_key"`
@@ -42,6 +45,9 @@ type ServerConfig struct {
 	SO_RCVBUF        int           `toml:"so_rcvbuf"`
 	SO_SNDBUF        int           `toml:"so_sndbuf"`
 	ProxyProtocol    bool          `toml:"proxy_protocol"`
+	UDPQueueSize     int           `toml:"udp_queue_size"`
+	UDPQueueLimit    int           `toml:"udp_queue_limit"`
+	UDPMaxFlows      int           `toml:"udp_max_flows"`
 }
 
 // ClientConfig represents the configuration for the client.
@@ -50,6 +56,7 @@ type ClientConfig struct {
 	Transport        TransportType `toml:"transport"`
 	Token            string        `toml:"token"`
 	ConnectionPool   int           `toml:"connection_pool"`
+	MaxPoolSize      int           `toml:"max_pool_size"`
 	RetryInterval    int           `toml:"retry_interval"`
 	Nodelay          bool          `toml:"nodelay"`
 	Keepalive        int           `toml:"keepalive_period"`
@@ -62,10 +69,14 @@ type ClientConfig struct {
 	MaxStreamBuffer  int           `toml:"mux_streambuffer"`
 	Sniffer          bool          `toml:"sniffer"`
 	WebPort          int           `toml:"web_port"`
+	WebBindAddr      string        `toml:"web_bind_addr"`
+	WebUsername      string        `toml:"web_username"`
+	WebPassword      string        `toml:"web_password"`
 	SnifferLog       string        `toml:"sniffer_log"`
 	DialTimeout      int           `toml:"dial_timeout"`
 	AggressivePool   bool          `toml:"aggressive_pool"`
 	EdgeIP           string        `toml:"edge_ip"`
+	TLSVerify        bool          `toml:"tls_verify"`
 	SkipOptz         bool          `toml:"skip_optz"`
 	MSS              int           `toml:"mss"`
 	SO_RCVBUF        int           `toml:"so_rcvbuf"`

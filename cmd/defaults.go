@@ -20,9 +20,13 @@ const ( // Default values
 	defaultMuxVersion       = 1
 	defaultMaxFrameSize     = 32768   // 32KB
 	defaultMaxReceiveBuffer = 4194304 // 4MB
-	defaultMaxStreamBuffer  = 65536   // 256KB
+	defaultMaxStreamBuffer  = 65536   // 64KB
 	defaultSnifferLog       = "backhaul.json"
 	defaultMuxCon           = 8
+	defaultUDPQueueSize     = 64
+	defaultUDPQueueLimit    = 4096
+	defaultUDPMaxFlows      = 2048
+	defaultWebBindAddr      = "127.0.0.1"
 )
 
 func applyDefaults(cfg *config.Config) {
@@ -58,6 +62,18 @@ func applyDefaults(cfg *config.Config) {
 	// Connection pool
 	if cfg.Client.ConnectionPool <= 0 {
 		cfg.Client.ConnectionPool = defaultConnectionPool
+	}
+	if cfg.Client.MaxPoolSize <= 0 {
+		if cfg.Client.ConnectionPool > maxConnectionPool {
+			// Validation below will reject the base size; avoid overflowing while
+			// deriving its default ceiling.
+			cfg.Client.MaxPoolSize = cfg.Client.ConnectionPool
+		} else {
+			cfg.Client.MaxPoolSize = cfg.Client.ConnectionPool * 4
+			if minimum := cfg.Client.ConnectionPool + 16; cfg.Client.MaxPoolSize < minimum {
+				cfg.Client.MaxPoolSize = minimum
+			}
+		}
 	}
 
 	// Mux Session
@@ -107,6 +123,16 @@ func applyDefaults(cfg *config.Config) {
 		cfg.Client.MaxStreamBuffer = defaultMaxStreamBuffer
 	}
 	// WebPort returns 0 if not exists
+	// The v0.7.2 monitor listened on every interface. New configurations default
+	// to loopback so enabling the monitor does not accidentally expose host
+	// metrics to the public Internet. Set web_bind_addr explicitly for remote
+	// access.
+	if cfg.Server.WebBindAddr == "" {
+		cfg.Server.WebBindAddr = defaultWebBindAddr
+	}
+	if cfg.Client.WebBindAddr == "" {
+		cfg.Client.WebBindAddr = defaultWebBindAddr
+	}
 
 	// SnifferLog
 	if cfg.Server.SnifferLog == "" {
@@ -128,5 +154,18 @@ func applyDefaults(cfg *config.Config) {
 	// Mux concurrancy
 	if cfg.Server.MuxCon < 1 {
 		cfg.Server.MuxCon = defaultMuxCon
+	}
+
+	// UDP queues are bounded both per flow and globally. v0.7.2 allocated a
+	// 100,000-entry channel for every source address, which made memory usage
+	// proportional to untrusted flow cardinality even when the queues were idle.
+	if cfg.Server.UDPQueueSize <= 0 {
+		cfg.Server.UDPQueueSize = defaultUDPQueueSize
+	}
+	if cfg.Server.UDPQueueLimit <= 0 {
+		cfg.Server.UDPQueueLimit = defaultUDPQueueLimit
+	}
+	if cfg.Server.UDPMaxFlows <= 0 {
+		cfg.Server.UDPMaxFlows = defaultUDPMaxFlows
 	}
 }
