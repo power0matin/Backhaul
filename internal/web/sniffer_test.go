@@ -2,13 +2,42 @@ package web
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
+	"time"
 
+	"github.com/shirou/gopsutil/v4/process"
 	"github.com/sirupsen/logrus"
 )
+
+type fakeProcessMetrics struct {
+	cpuPercent float64
+	rssBytes   uint64
+	threads    int32
+	fds        int32
+	fdsErr     error
+}
+
+func (f fakeProcessMetrics) Percent(time.Duration) (float64, error) {
+	return f.cpuPercent, nil
+}
+
+func (f fakeProcessMetrics) MemoryInfo() (*process.MemoryInfoStat, error) {
+	return &process.MemoryInfoStat{RSS: f.rssBytes}, nil
+}
+
+func (f fakeProcessMetrics) NumThreads() (int32, error) {
+	return f.threads, nil
+}
+
+func (f fakeProcessMetrics) NumFDs() (int32, error) {
+	return f.fds, f.fdsErr
+}
 
 func TestMonitorBasicAuthentication(t *testing.T) {
 	usage := NewDataStore("127.0.0.1", 0, context.Background(), t.TempDir()+"/usage.json", false, "Connected", "operator", "secret", logrus.New())
@@ -84,5 +113,91 @@ func TestRuntimeMetrics(t *testing.T) {
 	next.InheritRuntimeMetrics(usage)
 	if next.runtime != usage.runtime {
 		t.Fatal("automatic reconnect did not inherit runtime counters")
+	}
+}
+
+func TestProcessStatsReportCurrentProcess(t *testing.T) {
+	usage := NewDataStore("127.0.0.1", 0, context.Background(), t.TempDir()+"/usage.json", false, "Connected", "", "", logrus.New())
+	usage.selfProcess = fakeProcessMetrics{
+		cpuPercent: 3.25,
+		rssBytes:   64 << 20,
+		threads:    10,
+		fds:        530,
+	}
+	stats := usage.getProcessStats()
+
+	if stats.cpuPercent == nil || *stats.cpuPercent != 3.25 {
+		t.Fatalf("process CPU = %v, want 3.25", stats.cpuPercent)
+	}
+	if stats.rssBytes == nil || *stats.rssBytes != 64<<20 {
+		t.Fatalf("process RSS = %v, want %d", stats.rssBytes, uint64(64<<20))
+	}
+	if stats.threads == nil || *stats.threads != 10 {
+		t.Fatalf("process threads = %v, want 10", stats.threads)
+	}
+	if stats.fds == nil || *stats.fds != 530 {
+		t.Fatalf("process FDs = %v, want 530", stats.fds)
+	}
+}
+
+func TestProcessStatsIsolateUnsupportedMetric(t *testing.T) {
+	usage := NewDataStore("127.0.0.1", 0, context.Background(), t.TempDir()+"/usage.json", false, "Connected", "", "", logrus.New())
+	usage.selfProcess = fakeProcessMetrics{
+		cpuPercent: 1.5,
+		rssBytes:   32 << 20,
+		threads:    4,
+		fdsErr:     errors.New("not implemented"),
+	}
+
+	stats := usage.getProcessStats()
+	if stats.cpuPercent == nil || stats.rssBytes == nil || stats.threads == nil {
+		t.Fatal("one unsupported process metric suppressed supported metrics")
+	}
+	if stats.fds != nil {
+		t.Fatalf("unsupported FD metric = %d, want unavailable", *stats.fds)
+	}
+}
+
+func TestSystemStatsJSONCompatibility(t *testing.T) {
+	encoded, err := json.Marshal(SystemStats{})
+	if err != nil {
+		t.Fatalf("marshal SystemStats: %v", err)
+	}
+
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &fields); err != nil {
+		t.Fatalf("unmarshal SystemStats: %v", err)
+	}
+
+	wantFields := []string{
+		"tunnelStatus", "cpuUsage", "ramUsage", "diskUsage", "swapUsage",
+		"networkTraffic", "uploadSpeed", "downloadSpeed", "backhaulTraffic",
+		"sniffer", "allConnections", "uptime", "goroutines", "heapAlloc",
+		"activeConnections", "poolConnections", "reconnects", "rejected",
+		"processCpuPercent", "processRssBytes", "processThreads", "processFds",
+		"heapAllocBytes",
+	}
+	for _, field := range wantFields {
+		if _, ok := fields[field]; !ok {
+			t.Errorf("SystemStats JSON missing %q", field)
+		}
+	}
+}
+
+func TestMonitorLabelsHostAndProcessMetrics(t *testing.T) {
+	page, err := indexHTML.ReadFile("index.html")
+	if err != nil {
+		t.Fatalf("read embedded monitor page: %v", err)
+	}
+	html := string(page)
+	for _, want := range []string{
+		"Backhaul Process", "Process CPU", "Process RSS", "Open FDs",
+		"Active Connections", "Host CPU Usage", "Host RAM Usage",
+		"Host Network", "stats.processCpuPercent", "stats.processRssBytes",
+		"stats.sniffer === 'Running'", "Sniffer disabled",
+	} {
+		if !strings.Contains(html, want) {
+			t.Errorf("monitor page missing %q", want)
+		}
 	}
 }

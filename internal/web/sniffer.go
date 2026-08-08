@@ -22,6 +22,7 @@ import (
 	"github.com/shirou/gopsutil/v4/disk"
 	"github.com/shirou/gopsutil/v4/mem"
 	gnet "github.com/shirou/gopsutil/v4/net"
+	"github.com/shirou/gopsutil/v4/process"
 
 	"github.com/sirupsen/logrus"
 )
@@ -46,6 +47,7 @@ type Usage struct {
 	cachedAt     time.Time
 	previousNet  *gnet.IOCountersStat
 	previousAt   time.Time
+	selfProcess  processMetricsSource
 }
 
 type RuntimeMetrics struct {
@@ -63,27 +65,43 @@ type PortUsage struct {
 }
 
 type SystemStats struct {
-	TunnelStatus      string `json:"tunnelStatus"`
-	CPUUsage          string `json:"cpuUsage"`
-	RAMUsage          string `json:"ramUsage"`
-	DiskUsage         string `json:"diskUsage"`
-	SwapUsage         string `json:"swapUsage"`
-	NetworkTraffic    string `json:"networkTraffic"`
-	UploadSpeed       string `json:"uploadSpeed"`
-	DownloadSpeed     string `json:"downloadSpeed"`
-	BackhaulTraffic   string `json:"backhaulTraffic"`
-	Sniffer           string `json:"sniffer"`
-	AllConnections    string `json:"allConnections"`
-	Uptime            string `json:"uptime"`
-	Goroutines        int    `json:"goroutines"`
-	HeapAlloc         string `json:"heapAlloc"`
-	ActiveConnections int64  `json:"activeConnections"`
-	PoolConnections   int64  `json:"poolConnections"`
-	Reconnects        uint64 `json:"reconnects"`
-	Rejected          uint64 `json:"rejected"`
+	// CPUUsage, RAMUsage, DiskUsage, SwapUsage, NetworkTraffic, speeds, and
+	// AllConnections are legacy v0.8.0 fields and intentionally remain
+	// host-wide for API compatibility. Process-specific metrics are below.
+	TunnelStatus      string   `json:"tunnelStatus"`
+	CPUUsage          string   `json:"cpuUsage"`
+	RAMUsage          string   `json:"ramUsage"`
+	DiskUsage         string   `json:"diskUsage"`
+	SwapUsage         string   `json:"swapUsage"`
+	NetworkTraffic    string   `json:"networkTraffic"`
+	UploadSpeed       string   `json:"uploadSpeed"`
+	DownloadSpeed     string   `json:"downloadSpeed"`
+	BackhaulTraffic   string   `json:"backhaulTraffic"`
+	Sniffer           string   `json:"sniffer"`
+	AllConnections    string   `json:"allConnections"`
+	Uptime            string   `json:"uptime"`
+	Goroutines        int      `json:"goroutines"`
+	HeapAlloc         string   `json:"heapAlloc"`
+	ActiveConnections int64    `json:"activeConnections"`
+	PoolConnections   int64    `json:"poolConnections"`
+	Reconnects        uint64   `json:"reconnects"`
+	Rejected          uint64   `json:"rejected"`
+	ProcessCPUPercent *float64 `json:"processCpuPercent"`
+	ProcessRSSBytes   *uint64  `json:"processRssBytes"`
+	ProcessThreads    *int32   `json:"processThreads"`
+	ProcessFDs        *int32   `json:"processFds"`
+	HeapAllocBytes    uint64   `json:"heapAllocBytes"`
 }
 
 func NewDataStore(bindAddr string, webPort int, shutdownCtx context.Context, snifferLog string, sniffer bool, tunnelStatus, webUsername, webPassword string, logger *logrus.Logger) *Usage {
+	selfProcess, err := process.NewProcess(int32(os.Getpid()))
+	if err != nil {
+		logger.Warnf("process metrics unavailable: %v", err)
+	} else {
+		// Prime the non-blocking CPU sampler so the first /stats request reports
+		// an interval instead of the sampler's initialization value.
+		_, _ = selfProcess.Percent(0)
+	}
 	u := &Usage{
 		listenAddr:  stdnet.JoinHostPort(bindAddr, strconv.Itoa(webPort)),
 		shutdownCtx: shutdownCtx,
@@ -94,6 +112,7 @@ func NewDataStore(bindAddr string, webPort int, shutdownCtx context.Context, sni
 		webPassword: webPassword,
 		mu:          sync.Mutex{},
 		runtime:     &RuntimeMetrics{startedAt: time.Now()},
+		selfProcess: selfProcess,
 	}
 	u.tunnelStatus.Store(tunnelStatus)
 	return u
@@ -554,6 +573,7 @@ func (m *Usage) getSystemStats() (*SystemStats, error) {
 
 	var runtimeStats runtime.MemStats
 	runtime.ReadMemStats(&runtimeStats)
+	processStats := m.getProcessStats()
 	status, _ := m.tunnelStatus.Load().(string)
 	cpuUsage := float64(0)
 	if len(cpuPercent) > 0 {
@@ -579,12 +599,58 @@ func (m *Usage) getSystemStats() (*SystemStats, error) {
 		PoolConnections:   m.runtime.poolConnections.Load(),
 		Reconnects:        m.runtime.reconnects.Load(),
 		Rejected:          m.runtime.rejected.Load(),
+		ProcessCPUPercent: processStats.cpuPercent,
+		ProcessRSSBytes:   processStats.rssBytes,
+		ProcessThreads:    processStats.threads,
+		ProcessFDs:        processStats.fds,
+		HeapAllocBytes:    runtimeStats.HeapAlloc,
 	}
 
 	m.cachedStats = stats
 	m.cachedAt = now
 	copy := *stats
 	return &copy, nil
+}
+
+type processStats struct {
+	cpuPercent *float64
+	rssBytes   *uint64
+	threads    *int32
+	fds        *int32
+}
+
+type processMetricsSource interface {
+	Percent(time.Duration) (float64, error)
+	MemoryInfo() (*process.MemoryInfoStat, error)
+	NumThreads() (int32, error)
+	NumFDs() (int32, error)
+}
+
+// getProcessStats returns metrics for Backhaul itself. Each metric is
+// collected independently so an unsupported platform-specific metric (for
+// example file-descriptor counts on Darwin) does not make /stats unavailable.
+// Percent(0) is non-blocking and measures CPU since the previous collection.
+func (m *Usage) getProcessStats() processStats {
+	var stats processStats
+	if m.selfProcess == nil {
+		return stats
+	}
+
+	if cpuPercent, err := m.selfProcess.Percent(0); err == nil {
+		stats.cpuPercent = &cpuPercent
+	}
+	if memoryInfo, err := m.selfProcess.MemoryInfo(); err == nil {
+		rssBytes := memoryInfo.RSS
+		stats.rssBytes = &rssBytes
+	}
+	if threads, err := m.selfProcess.NumThreads(); err == nil {
+		stats.threads = &threads
+	}
+	if fds, err := m.selfProcess.NumFDs(); err == nil {
+		stats.fds = &fds
+	}
+
+	return stats
 }
 
 func (m *Usage) formatSpeed(bytesPerSec float64) string {
