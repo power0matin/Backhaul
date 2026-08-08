@@ -76,3 +76,59 @@ func TestWebSocketDialerTLSVerificationIsConfigurable(t *testing.T) {
 		t.Fatal("tls_verify=true accepted an untrusted self-signed certificate")
 	}
 }
+
+func TestWebSocketDialerSubprotocolNegotiationIsBackwardCompatible(t *testing.T) {
+	const capability = "backhaul.test-capability.v1"
+
+	for _, tc := range []struct {
+		name            string
+		clientProtocols []string
+		serverProtocols []string
+		wantProtocol    string
+	}{
+		{
+			name:            "new client remains compatible with legacy server",
+			clientProtocols: []string{capability},
+			wantProtocol:    "",
+		},
+		{
+			name:            "legacy client remains compatible with new server",
+			serverProtocols: []string{capability},
+			wantProtocol:    "",
+		},
+		{
+			name:            "new peers negotiate capability",
+			clientProtocols: []string{capability},
+			serverProtocols: []string{capability},
+			wantProtocol:    capability,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			upgraded := make(chan *websocket.Conn, 1)
+			upgrader := websocket.Upgrader{Subprotocols: tc.serverProtocols}
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				conn, err := upgrader.Upgrade(w, r, nil)
+				if err == nil {
+					upgraded <- conn
+				}
+			}))
+			defer server.Close()
+
+			parsed, err := url.Parse(server.URL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			client, err := WebSocketDialer(context.Background(), parsed.Host, "", "/channel", time.Second, time.Second, true, "token", config.WS, false, 1, 0, 0, tc.clientProtocols...)
+			if err != nil {
+				t.Fatalf("dial with offered subprotocol: %v", err)
+			}
+			serverConn := <-upgraded
+			defer client.Close()
+			defer serverConn.Close()
+
+			if got := client.Subprotocol(); got != tc.wantProtocol {
+				t.Fatalf("negotiated subprotocol = %q, want %q", got, tc.wantProtocol)
+			}
+		})
+	}
+}

@@ -26,13 +26,49 @@ perform Go's VCS metadata stamping; release flags are unchanged.
 
 ## Stage 2 — WSMUX session/pool lifecycle
 
-- [ ] Stress burst growth followed by sustained low load.
-- [ ] Prove whether excess sessions retire; fix lifecycle/ownership only where
+- [x] Stress burst growth followed by sustained low load.
+- [x] Prove whether excess sessions retire; fix lifecycle/ownership only where
   the test demonstrates a problem.
-- [ ] Keep the pool bounded and preserve automatic recovery.
+- [x] Keep retirement work bounded and preserve mixed-version recovery and
+  transport behavior.
 
 Exit gate: no monotonically growing session/goroutine/FD population under the
 tested burst-to-idle workload.
+
+Status: **Complete — 2026-08-08.** A real WSMUX burst-to-idle regression test
+first reproduced the problem on the Stage 1 implementation: with a base pool
+of 1 and six concurrent streams, the pool grew to 7 sessions and was still at
+7 after the 15-second idle observation window. Code inspection showed that the
+legacy shrink path only suppressed a *future* `SG_Chan` request; it did not
+retire an already-created idle SMUX session, and server-demand sessions were
+not part of the adaptive target.
+
+The fix uses an explicitly negotiated WebSocket subprotocol capability
+(`backhaul.mux-retire.v1`). Only new peers exchange the appended retirement
+control signal. The server-side session owner performs retirement only when a
+session has no active stream, so an established stream is never sacrificed to
+hit the pool target. Retirement queues and each controller batch are bounded.
+When either peer is older, the capability is not negotiated and legacy wire
+behavior is retained.
+
+After the fix, three consecutive burst-to-idle runs all returned from peaks of
+6-7 sessions to the configured base of 1. A representative run returned open
+FDs from 49 at burst peak to 16 (15 before the burst) and goroutines from 117
+to 32 (27 before the burst), while a deliberately held stream remained usable
+through retirement. An apparent FD discrepancy found while developing the
+test was traced to Go's Linux `internal/poll` splice pipe cache used by the
+test echo server's `io.Copy`, not to live Backhaul sockets; the harness now
+uses explicit reads/writes so that resource assertions measure the tunnel
+lifecycle rather than the standard-library splice cache.
+
+Validation used Go 1.26.5. `go test ./...`, `go test -race ./...`, and
+`go vet ./...` passed. A 30-second WSMUX soak completed 282,656 successful
+connections with zero failed batches; sampled live heap ranged from 1,517,736
+to 2,507,704 bytes and sampled goroutines peaked at 69. CGO-disabled release-
+flag builds (`-s -w`) passed for Linux amd64/arm64 and Darwin amd64/arm64.
+Handshake regression tests cover new-client/legacy-server,
+legacy-client/new-server, and new/new capability negotiation, and a signal
+value test locks all pre-existing control bytes to their historical values.
 
 ## Stage 3 — Matched-duration v0.7.2 vs v0.8.x A/B harness
 

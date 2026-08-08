@@ -38,6 +38,8 @@ type WsMuxTransport struct {
 	restartOnce    sync.Once
 	streamCounter  int32
 	sessionCounter int32
+	retireSessions chan struct{}
+	muxRetire      bool
 }
 
 type WsMuxConfig struct {
@@ -89,6 +91,7 @@ func NewWSMuxServer(parentCtx context.Context, config *WsMuxConfig, logger *logr
 		reqNewConnChan: make(chan struct{}, config.ChannelSize),
 		streamCounter:  0,
 		sessionCounter: 0,
+		retireSessions: make(chan struct{}, 16),
 		controlChannel: nil, // will be set when a control connection is established
 		usageMonitor:   web.NewDataStore(config.WebBindAddr, config.WebPort, ctx, config.SnifferLog, config.Sniffer, fmt.Sprintf("Disconnected (%s)", config.Mode), config.WebUsername, config.WebPassword, logger),
 	}
@@ -209,6 +212,18 @@ func (s *WsMuxTransport) channelHandler() {
 				s.Restart()
 				return
 
+			case utils.SG_MuxRetire:
+				if !s.muxRetire {
+					s.logger.Warn("received unnegotiated WSMUX retirement request")
+					go s.Restart()
+					return
+				}
+				select {
+				case s.retireSessions <- struct{}{}:
+				default:
+					s.logger.Debug("WSMUX retirement queue already has pending work")
+				}
+
 			default:
 				s.logger.Errorf("unexpected response from channel: %v", msg)
 				go s.Restart()
@@ -225,6 +240,7 @@ func (s *WsMuxTransport) tunnelListener() {
 		ReadBufferSize:   16 * 1024,
 		WriteBufferSize:  16 * 1024,
 		HandshakeTimeout: 45 * time.Second,
+		Subprotocols:     []string{utils.WSMUXRetireSubprotocol},
 		CheckOrigin: func(r *http.Request) bool {
 			return true
 		},
@@ -266,6 +282,10 @@ func (s *WsMuxTransport) tunnelListener() {
 				}
 
 				s.logger.Info("control channel established successfully")
+				s.muxRetire = conn.Subprotocol() == utils.WSMUXRetireSubprotocol
+				if s.muxRetire {
+					s.logger.Debug("negotiated graceful WSMUX idle-session retirement")
+				}
 
 				numCPU := runtime.NumCPU()
 				if numCPU > 4 {
@@ -575,6 +595,18 @@ func (s *WsMuxTransport) handleSession(session *smux.Session) {
 		case <-s.ctx.Done():
 			<-counter
 			return
+
+		case <-s.retireSessions:
+			// This handler is the only code that assigns new streams to this
+			// session. A single counter token means no stream handler is active,
+			// so retiring here cannot cut an established user connection.
+			if len(counter) == 1 && session.NumStreams() == 0 {
+				<-counter
+				s.logger.Debug("retiring idle WSMUX session")
+				return
+			}
+			<-counter
+			continue
 
 		case incomingConn := <-s.localChannel:
 			if time.Now().UnixMilli()-incomingConn.timeCreated > 3000 { // 3000ms

@@ -14,7 +14,7 @@ import (
 	"github.com/musix/backhaul/config"
 )
 
-func WebSocketDialer(ctx context.Context, addr string, edgeIP string, path string, timeout time.Duration, keepalive time.Duration, nodelay bool, token string, mode config.TransportType, tlsVerify bool, retry int, SO_RCVBUF int, SO_SNDBUF int) (*websocket.Conn, error) {
+func WebSocketDialer(ctx context.Context, addr string, edgeIP string, path string, timeout time.Duration, keepalive time.Duration, nodelay bool, token string, mode config.TransportType, tlsVerify bool, retry int, SO_RCVBUF int, SO_SNDBUF int, subprotocols ...string) (*websocket.Conn, error) {
 	var tunnelWSConn *websocket.Conn
 	var err error
 
@@ -25,7 +25,7 @@ func WebSocketDialer(ctx context.Context, addr string, edgeIP string, path strin
 
 	for i := 0; i < retries; i++ {
 		// Attempt to dial the WebSocket
-		tunnelWSConn, err = attemptDialWebSocket(ctx, addr, edgeIP, path, timeout, keepalive, nodelay, token, mode, tlsVerify, SO_RCVBUF, SO_SNDBUF)
+		tunnelWSConn, err = attemptDialWebSocket(ctx, addr, edgeIP, path, timeout, keepalive, nodelay, token, mode, tlsVerify, SO_RCVBUF, SO_SNDBUF, subprotocols)
 		if err == nil {
 			// If successful, return the connection
 			return tunnelWSConn, nil
@@ -44,7 +44,7 @@ func WebSocketDialer(ctx context.Context, addr string, edgeIP string, path strin
 	return nil, err
 }
 
-func attemptDialWebSocket(ctx context.Context, addr string, edgeIP string, path string, timeout time.Duration, keepalive time.Duration, nodelay bool, token string, mode config.TransportType, tlsVerify bool, SO_RCVBUF int, SO_SNDBUF int) (*websocket.Conn, error) {
+func attemptDialWebSocket(ctx context.Context, addr string, edgeIP string, path string, timeout time.Duration, keepalive time.Duration, nodelay bool, token string, mode config.TransportType, tlsVerify bool, SO_RCVBUF int, SO_SNDBUF int, subprotocols []string) (*websocket.Conn, error) {
 	handshakeTimeout := timeout
 	if handshakeTimeout <= 0 {
 		handshakeTimeout = 10 * time.Second
@@ -101,7 +101,7 @@ func attemptDialWebSocket(ctx context.Context, addr string, edgeIP string, path 
 	headers.Add("User-Agent", randomUserAgent)
 
 	var wsURL string
-	dialer := websocket.Dialer{}
+	dialer := websocket.Dialer{Subprotocols: subprotocols}
 
 	// Handle edgeIP assignment
 	if edgeIP != "" {
@@ -127,6 +127,7 @@ func attemptDialWebSocket(ctx context.Context, addr string, edgeIP string, path 
 		dialer = websocket.Dialer{
 			EnableCompression: true,
 			HandshakeTimeout:  handshakeTimeout,
+			Subprotocols:      subprotocols,
 			NetDial: func(_, addr string) (net.Conn, error) {
 				conn, err := TcpDialer(ctx, edgeIP, "", timeout, keepalive, nodelay, 1, SO_RCVBUF, SO_SNDBUF, 0)
 				if err != nil {
@@ -148,6 +149,7 @@ func attemptDialWebSocket(ctx context.Context, addr string, edgeIP string, path 
 			EnableCompression: true,
 			TLSClientConfig:   tlsConfig,
 			HandshakeTimeout:  handshakeTimeout,
+			Subprotocols:      subprotocols,
 			NetDial: func(_, addr string) (net.Conn, error) {
 				conn, err := TcpDialer(ctx, edgeIP, "", timeout, keepalive, nodelay, 1, SO_RCVBUF, SO_SNDBUF, 0)
 				if err != nil {

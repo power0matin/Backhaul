@@ -32,7 +32,12 @@ type WsMuxTransport struct {
 	poolConnections int32
 	loadConnections int32
 	controlFlow     chan struct{}
+	retireRequests  chan struct{}
+	muxRetire       bool
 }
+
+const maxMuxRetireBatch = 8
+
 type WsMuxConfig struct {
 	RemoteAddr       string
 	Token            string
@@ -82,6 +87,7 @@ func NewWSMuxClient(parentCtx context.Context, config *WsMuxConfig, logger *logr
 		poolConnections: 0,
 		loadConnections: 0,
 		controlFlow:     make(chan struct{}, 100),
+		retireRequests:  make(chan struct{}, maxMuxRetireBatch),
 	}
 
 	return client
@@ -126,7 +132,7 @@ func (c *WsMuxTransport) channelDialer() {
 			return
 		default:
 
-			tunnelWSConn, err := network.WebSocketDialer(c.ctx, c.config.RemoteAddr, c.config.EdgeIP, "/channel", c.config.DialTimeOut, c.config.KeepAlive, true, c.config.Token, c.config.Mode, c.config.TLSVerify, 3, 0, 0)
+			tunnelWSConn, err := network.WebSocketDialer(c.ctx, c.config.RemoteAddr, c.config.EdgeIP, "/channel", c.config.DialTimeOut, c.config.KeepAlive, true, c.config.Token, c.config.Mode, c.config.TLSVerify, 3, 0, 0, utils.WSMUXRetireSubprotocol)
 			if err != nil {
 				if c.ctx.Err() != nil {
 					return
@@ -138,7 +144,11 @@ func (c *WsMuxTransport) channelDialer() {
 				continue
 			}
 			c.controlChannel = tunnelWSConn
+			c.muxRetire = tunnelWSConn.Subprotocol() == utils.WSMUXRetireSubprotocol
 			c.logger.Info("control channel established successfully")
+			if c.muxRetire {
+				c.logger.Debug("negotiated graceful WSMUX idle-session retirement")
+			}
 
 			c.usageMonitor.SetTunnelStatus(fmt.Sprintf("Connected (%s)", c.config.Mode))
 
@@ -205,19 +215,42 @@ func (c *WsMuxTransport) poolMaintainer() {
 
 				// Add a new connection to the pool
 				go c.tunnelDialer()
-			} else if float64(loadConnections+x) < float64(poolConnectionsAvg)*y && newPoolSize > c.config.ConnPoolSize {
-				c.logger.Debugf("decreasing pool size: %d -> %d, avg pool conn: %d, avg load conn: %d", newPoolSize, newPoolSize-1, poolConnectionsAvg, loadConnections)
-				newPoolSize--
+			} else if float64(loadConnections+x) < float64(poolConnectionsAvg)*y {
+				decreasedTarget := false
+				if newPoolSize > c.config.ConnPoolSize {
+					c.logger.Debugf("decreasing pool target: %d -> %d, avg pool conn: %d, avg load conn: %d", newPoolSize, newPoolSize-1, poolConnectionsAvg, loadConnections)
+					newPoolSize--
+					decreasedTarget = true
+				}
 
-				// send a signal to controlFlow
-				select {
-				case c.controlFlow <- struct{}{}:
-				default:
+				currentPool := int(atomic.LoadInt32(&c.poolConnections))
+				if c.muxRetire && currentPool > newPoolSize {
+					c.queueMuxRetirements(currentPool - newPoolSize)
+				} else if !c.muxRetire && decreasedTarget {
+					// Preserve the legacy shrink hint when the peer does not support
+					// graceful retirement: suppress one future server pool request.
+					select {
+					case c.controlFlow <- struct{}{}:
+					default:
+					}
 				}
 			}
 		}
 	}
 
+}
+
+func (c *WsMuxTransport) queueMuxRetirements(excess int) {
+	if excess > maxMuxRetireBatch {
+		excess = maxMuxRetireBatch
+	}
+	for i := 0; i < excess; i++ {
+		select {
+		case c.retireRequests <- struct{}{}:
+		default:
+			return
+		}
+	}
 }
 
 func (c *WsMuxTransport) channelHandler() {
@@ -262,6 +295,15 @@ func (c *WsMuxTransport) channelHandler() {
 		case <-c.ctx.Done():
 			_ = control.WriteMessage(websocket.BinaryMessage, []byte{utils.SG_Closed})
 			return
+
+		case <-c.retireRequests:
+			if err := control.WriteMessage(websocket.BinaryMessage, []byte{utils.SG_MuxRetire}); err != nil {
+				if c.ctx.Err() == nil {
+					c.logger.Warn("failed to request WSMUX session retirement; reconnecting: ", err)
+					go c.Restart()
+				}
+				return
+			}
 
 		case msg := <-msgChan:
 			switch msg {
