@@ -1,4 +1,4 @@
-# Backhaul
+<h1 align="center">Backhaul</h1>
 
 <!-- repo-badges:start -->
 <p align="center">
@@ -87,7 +87,6 @@ reproduction methodology, stress/soak results, and baseline comparison.
 * **Web Interface**: Real-time monitoring through a lightweight web interface.
 * **Hot Reload Configuration**: Supports dynamic configuration reloading without server restarts.
 
-
 ## Installation
 
 1. **Download** the latest release from the [fork releases page](https://github.com/power0matin/Backhaul/releases).
@@ -153,8 +152,6 @@ To start using the solution, you'll need to configure both server and client com
     udp_queue_size = 64            # UDP/accept_udp queued packets per flow. (optional, default: 64)
     udp_queue_limit = 4096         # UDP/accept_udp queued packets across all flows. (optional, default: 4096; max: 16384)
     udp_max_flows = 2048           # Maximum simultaneously tracked UDP flows. (optional, default: 2048)
-
-
 
     ports = [
     "443-600",                  # Listen on all ports in the range 443 to 600
@@ -301,7 +298,6 @@ There are two intentional operational changes:
   uses `"443-600=5201"`; the old README example
   `"443-600:5201"` was not a format the implementation supported.
 
-
 #### TCP Multiplexing Configuration
 * **Server**:
 
@@ -352,7 +348,6 @@ There are two intentional operational changes:
    `mux_session`: Number of multiplexed sessions. Increase this if you need to handle more simultaneous sessions over a single connection.
    
    * Refer to TCP configuration for more information.
-
 
 #### UDP Configuration
 * **Server**:
@@ -474,7 +469,6 @@ There are two intentional operational changes:
 
    * Refer to the next section for instructions on generating `tls_cert` and `tls_key`.
 
-
 #### WS Multiplexing Configuration
 * **Server**:
 
@@ -571,8 +565,6 @@ There are two intentional operational changes:
    log_level = "info"
    ```
 
-
-
 ## Generating a Self-Signed TLS Certificate with OpenSSL
 
 To generate a TLS certificate and key, you can use tools like OpenSSL. Here’s a step-by-step guide on how to create a self-signed certificate and key using OpenSSL:
@@ -668,13 +660,11 @@ journalctl -u backhaul.service -e -f
 * `ws`: Use if you need to traverse HTTP-based firewalls or proxies.
 * `wss`: Use this for secure WebSocket connections that need to traverse HTTP-based firewalls or proxies. It encrypts data for added security, similar to WS but with encryption.
 
-
 ## Benchmark
 
 The reproducible v0.7.2 vs v0.8.0 methodology and results are in
 [PERFORMANCE.md](./PERFORMANCE.md). The files under [benchmark](./benchmark/)
 also contain the executable Go benchmark harness and legacy upstream results.
-
 
 ## License
 
@@ -690,3 +680,33 @@ Thanks for your support!
 
 ## Stargazers over time
 [![Stargazers over time](https://starchart.cc/Musixal/Backhaul.svg?variant=light)](https://starchart.cc/Musixal/Backhaul)
+
+## Contact
+
+**Matin Shahabadi**
+
+- Website: [matinshahabadi.ir](https://matinshahabadi.ir)
+- Email: [me@matinshahabadi.ir](mailto:me@matinshahabadi.ir)
+- GitHub: [power0matin](https://github.com/power0matin)
+- LinkedIn: [matin-shahabadi](https://www.linkedin.com/in/matin-shahabadi)
+
+<p align="center">
+  <b>If this helped you, consider giving it a star!</b><br>
+  <sub>Your support keeps the project alive and helps others find it.</sub>
+</p>
+
+<!-- Copy-paste in your Readme.md file -->
+<p align="center">
+  <a href="https://next.ossinsight.io/widgets/official/analyze-repo-stars-history?repo_id=1325969524" target="_blank" style="display: block" align="center">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="https://next.ossinsight.io/widgets/official/analyze-repo-stars-history/thumbnail.png?repo_id=1325969524&amp;image_size=auto&amp;color_scheme=dark" width="721" height="auto">
+      <img alt="Star History of power0matin/Backhaul" src="https://next.ossinsight.io/widgets/official/analyze-repo-stars-history/thumbnail.png?repo_id=1325969524&amp;image_size=auto&amp;color_scheme=light" width="721" height="auto">
+    </picture>
+  </a>
+</p>
+
+<!-- Made with [OSS Insight](https://ossinsight.io/) -->
+
+<p align="center">
+  Created by <a href="https://github.com/power0matin">power0matin</a>
+</p>
