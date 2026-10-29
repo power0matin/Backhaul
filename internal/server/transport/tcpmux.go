@@ -147,65 +147,88 @@ func (s *TcpMuxTransport) Restart() {
 }
 
 func (s *TcpMuxTransport) channelHandshake() {
+	ready := make(chan struct{}, 1)
+	workers := make(chan struct{}, maxConcurrentControlHandshakes)
 	for {
 		select {
 		case <-s.ctx.Done():
+			s.closePendingHandshakes()
+			return
+		case <-ready:
+			s.closePendingHandshakes()
+			s.logger.Info("control channel successfully established.")
 			return
 		case conn := <-s.handshakeChannel:
-			// Set a read deadline for the token response
-			if err := conn.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
-				s.logger.Errorf("failed to set read deadline: %v", err)
-				conn.Close()
-				continue
-			}
-			msg, transport, err := utils.ReceiveBinaryTransportString(conn)
-			if err != nil {
-				if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-					s.logger.Warn("timeout while waiting for control channel signal")
-				} else {
-					s.logger.Errorf("failed to receive control channel signal: %v", err)
-				}
-				conn.Close() // Close connection on error or timeout
-				continue
-			}
-			if transport != utils.SG_Chan {
-				s.logger.Errorf("invalid signal received for channel, discarding connection")
-				conn.Close()
-				continue
-			}
+			select {
+			case workers <- struct{}{}:
+				go func(conn net.Conn) {
+					defer func() { <-workers }()
+					keep := false
+					defer func() {
+						if !keep {
+							_ = conn.Close()
+						}
+					}()
+					stopClose := context.AfterFunc(s.ctx, func() { _ = conn.Close() })
+					defer stopClose()
 
-			// Resetting the deadline (removes any existing deadline)
-			conn.SetReadDeadline(time.Time{})
-
-			if !utils.SecureTokenEqual(msg, s.config.Token) {
-				s.logger.Warn("invalid security token received")
-				conn.Close()
-				continue
+					if !readControlHandshake(conn, s.config.Token, s.logger) {
+						return
+					}
+					if !s.trySetControlChannel(conn) {
+						return
+					}
+					tcpConn, ok := conn.(*net.TCPConn)
+					if !ok {
+						s.clearControlChannel(conn)
+						return
+					}
+					if err := tcpConn.SetNoDelay(true); err != nil {
+						s.logger.Warnf("failed to set TCP_NODELAY for Control Channel %s: %v", tcpConn.RemoteAddr(), err)
+					}
+					if !writeControlHandshakeResponse(conn, s.config.Token, s.logger) {
+						s.clearControlChannel(conn)
+						return
+					}
+					keep = true
+					select {
+					case ready <- struct{}{}:
+					default:
+					}
+				}(conn)
+			default:
+				_ = conn.Close()
 			}
+		}
+	}
+}
 
-			err = utils.SendBinaryTransportString(conn, s.config.Token, utils.SG_Chan)
-			if err != nil {
-				s.logger.Errorf("failed to send security token: %v", err)
-				conn.Close()
-				continue
-			}
-
-			//FORCE CONTROL CHANNEL TO BE TCP_NODELAY
-			tcpConn, ok := conn.(*net.TCPConn)
-			if !ok {
-				conn.Close()
-				continue
-			}
-			if err := tcpConn.SetNoDelay(true); err != nil {
-				s.logger.Warnf("failed to set TCP_NODELAY for Control Channel %s: %v", tcpConn.RemoteAddr().String(), err)
-			}
-
-			s.setControlChannel(conn)
-
-			s.logger.Info("control channel successfully established.")
-
+func (s *TcpMuxTransport) closePendingHandshakes() {
+	for {
+		select {
+		case conn := <-s.handshakeChannel:
+			_ = conn.Close()
+		default:
 			return
 		}
+	}
+}
+
+func (s *TcpMuxTransport) trySetControlChannel(conn net.Conn) bool {
+	s.controlMu.Lock()
+	defer s.controlMu.Unlock()
+	if s.controlChannel != nil {
+		return false
+	}
+	s.controlChannel = conn
+	return true
+}
+
+func (s *TcpMuxTransport) clearControlChannel(conn net.Conn) {
+	s.controlMu.Lock()
+	defer s.controlMu.Unlock()
+	if s.controlChannel == conn {
+		s.controlChannel = nil
 	}
 }
 
