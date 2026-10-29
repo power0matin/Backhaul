@@ -116,3 +116,24 @@ func TestAcceptUDPCongestedFlowRemovedWhenHandlerEnds(t *testing.T) {
 		t.Fatal("completed congested UDP flow remained in active flow map")
 	}
 }
+
+
+func TestPacketAgeMillisHandlesTimestampWrap(t *testing.T) {
+	tests := []struct {
+		name         string
+		nowMillis    int64
+		packetMillis int64
+		wantAge      int64
+	}{
+		{name: "same window", nowMillis: 200_000, packetMillis: 199_000, wantAge: 1_000},
+		{name: "crosses ten minute wrap", nowMillis: 600_002, packetMillis: 599_999, wantAge: 3},
+		{name: "invalid timestamp", nowMillis: 42, packetMillis: 600_000, wantAge: congestionTimestampWindowMillis},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := packetAgeMillis(tt.nowMillis, tt.packetMillis); got != tt.wantAge {
+				t.Fatalf("packetAgeMillis(%d, %d) = %d, want %d", tt.nowMillis, tt.packetMillis, got, tt.wantAge)
+			}
+		})
+	}
+}

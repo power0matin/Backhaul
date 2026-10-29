@@ -359,7 +359,9 @@ func (c *UdpTransport) handleTunnelConn(tunConn *net.UDPConn) {
 	atomic.AddInt32(&c.poolConnections, 1)
 
 	// Prepare a buffer to receive the server's response
-	buffer := make([]byte, 47) // maximum buffer requried for store in IPv6:Port format
+	// A DNS hostname may be 253 bytes, followed by ':' and a five-digit port.
+	// 512 bytes also comfortably accommodates bracketed IPv6 endpoint strings.
+	buffer := make([]byte, 512)
 
 	for {
 		n, _, err := tunConn.ReadFromUDP(buffer)

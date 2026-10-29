@@ -190,6 +190,21 @@ token = "a-long-random-test-token"
 	if !cfg.Client.TLSVerify {
 		t.Fatal("omitted client.tls_verify did not default to true")
 	}
+	if !cfg.Client.SkipOptz {
+		t.Fatal("omitted client.skip_optz must disable host-wide TCP tuning by default")
+	}
+
+	explicitTuningOptIn := secureClient + "skip_optz = false\n"
+	if err := os.WriteFile(path, []byte(explicitTuningOptIn), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig with explicit skip_optz=false: %v", err)
+	}
+	if cfg.Client.SkipOptz {
+		t.Fatal("explicit client.skip_optz=false was not preserved")
+	}
 
 	explicitOptOut := secureClient + "tls_verify = false\n"
 	if err := os.WriteFile(path, []byte(explicitOptOut), 0o600); err != nil {
