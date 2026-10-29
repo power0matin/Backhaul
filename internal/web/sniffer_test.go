@@ -254,3 +254,24 @@ func TestStatsResponseUsesServerErrorWhenCollectionFails(t *testing.T) {
 		t.Fatalf("unexpected error response body: %q", recorder.Body.String())
 	}
 }
+
+func TestCounterDeltaHandlesCounterReset(t *testing.T) {
+	tests := []struct {
+		name     string
+		current  uint64
+		previous uint64
+		want     uint64
+	}{
+		{name: "increasing", current: 900, previous: 400, want: 500},
+		{name: "unchanged", current: 400, previous: 400, want: 0},
+		{name: "counter reset", current: 25, previous: 900, want: 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := counterDelta(tt.current, tt.previous); got != tt.want {
+				t.Fatalf("counterDelta(%d, %d) = %d, want %d", tt.current, tt.previous, got, tt.want)
+			}
+		})
+	}
+}
+
