@@ -211,6 +211,40 @@ func TestValidateLocalMappingHyphenatedHostname(t *testing.T) {
 	}
 }
 
+func TestValidateDurationBounds(t *testing.T) {
+	tests := []struct {
+		name   string
+		server bool
+		field  string
+		set    func(*config.Config, int)
+	}{
+		{name: "server keepalive upper bound", server: true, field: "server.keepalive_period", set: func(c *config.Config, v int) { c.Server.Keepalive = v }},
+		{name: "server heartbeat upper bound", server: true, field: "server.heartbeat", set: func(c *config.Config, v int) { c.Server.Heartbeat = v }},
+		{name: "client keepalive upper bound", field: "client.keepalive_period", set: func(c *config.Config, v int) { c.Client.Keepalive = v }},
+		{name: "client retry upper bound", field: "client.retry_interval", set: func(c *config.Config, v int) { c.Client.RetryInterval = v }},
+		{name: "client dial timeout upper bound", field: "client.dial_timeout", set: func(c *config.Config, v int) { c.Client.DialTimeout = v }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var cfg *config.Config
+			if tt.server {
+				cfg = validServerConfig()
+			} else {
+				cfg = &config.Config{Client: config.ClientConfig{
+					RemoteAddr: "server.example.com:3080",
+					Transport:  config.TCP,
+					Token:      "test-token",
+				}}
+				applyDefaults(cfg)
+			}
+			tt.set(cfg, maxIntervalSeconds+1)
+			if err := ValidateConfig(cfg); err == nil || !strings.Contains(err.Error(), tt.field) {
+				t.Fatalf("expected upper-bound error for %s, got %v", tt.field, err)
+			}
+		})
+	}
+}
+
 func TestValidatePortMapping(t *testing.T) {
 	valid := []string{
 		"443-600",

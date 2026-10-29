@@ -128,10 +128,10 @@ To start using the solution, you'll need to configure both server and client com
     accept_udp = false             # Only supported by transport = "tcp". (optional, default: false)
      proxy_protocol = false         # Only supported by tcp, tcpmux, wsmux, and wssmux.
     token = "your_token"          # Shared strong secret; required and identical on server and client.
-    keepalive_period = 75         # Interval in seconds to send keep-alive packets.(optional, default: 75s)
+    keepalive_period = 75         # Interval in seconds to send keep-alive packets (1–86400; default: 75).
     nodelay = false               # Enable TCP_NODELAY (optional, default: false).
     channel_size = 2048           # Bounded tunnel/local queue size. Brief saturation gets bounded backpressure; persistent overload is rejected. (optional, default: 2048).
-    heartbeat = 40                # In seconds. Ping interval for tunnel stability. Min: 1s. (Optional, default: 40s)
+    heartbeat = 40                # Ping interval in seconds (1–86400; default: 40).
     mux_con = 8                   # Mux concurrency. Number of connections that can be multiplexed into a single stream (optional, default: 8).
     mux_version = 1               # SMUX protocol version (1 or 2). Version 2 may have extra features. (optional)
     mux_framesize = 32768         # 32 KB. The maximum size of a frame that can be sent over a connection. (optional)

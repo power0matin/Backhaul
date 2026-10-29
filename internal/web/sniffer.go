@@ -602,8 +602,11 @@ func (m *Usage) getSystemStats() (*SystemStats, error) {
 	if m.previousNet != nil {
 		elapsed := now.Sub(m.previousAt).Seconds()
 		if elapsed > 0 {
-			uploadSpeed = float64(currentNet.BytesSent-m.previousNet.BytesSent) / elapsed
-			downloadSpeed = float64(currentNet.BytesRecv-m.previousNet.BytesRecv) / elapsed
+			// Network interfaces and their counters can reset while Backhaul is
+			// running (for example after a link flap). Never underflow uint64 and
+			// report a multi-exabyte spike for a counter reset.
+			uploadSpeed = float64(counterDelta(currentNet.BytesSent, m.previousNet.BytesSent)) / elapsed
+			downloadSpeed = float64(counterDelta(currentNet.BytesRecv, m.previousNet.BytesRecv)) / elapsed
 		}
 	}
 	netCopy := *currentNet
@@ -705,6 +708,13 @@ func (m *Usage) formatSpeed(bytesPerSec float64) string {
 
 func (m *Usage) formatFloat(value float64) string {
 	return fmt.Sprintf("%.2f%%", value)
+}
+
+func counterDelta(current, previous uint64) uint64 {
+	if current < previous {
+		return 0
+	}
+	return current - previous
 }
 
 func (m *Usage) getNetworkStats() (*gnet.IOCountersStat, error) {

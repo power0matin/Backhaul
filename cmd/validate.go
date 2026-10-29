@@ -19,6 +19,7 @@ const (
 	maxMuxConcurrency  = 4096
 	maxAuthTokenLength = 65_535
 	maxMuxBufferSize  = 256 << 20 // 256 MiB: bound per-role mux buffering
+	maxIntervalSeconds = 24 * 60 * 60
 )
 
 // ValidateConfig rejects values that would otherwise fail late in goroutines,
@@ -46,6 +47,12 @@ func ValidateConfig(cfg *config.Config) error {
 			return err
 		}
 		if err := validateToken("server.token", cfg.Server.Token); err != nil {
+			return err
+		}
+		if err := validateSeconds("server.keepalive_period", cfg.Server.Keepalive); err != nil {
+			return err
+		}
+		if err := validateSeconds("server.heartbeat", cfg.Server.Heartbeat); err != nil {
 			return err
 		}
 		if cfg.Server.ChannelSize < 1 || cfg.Server.ChannelSize > maxChannelSize {
@@ -94,6 +101,15 @@ func ValidateConfig(cfg *config.Config) error {
 	if err := validateToken("client.token", cfg.Client.Token); err != nil {
 		return err
 	}
+	if err := validateSeconds("client.keepalive_period", cfg.Client.Keepalive); err != nil {
+		return err
+	}
+	if err := validateSeconds("client.retry_interval", cfg.Client.RetryInterval); err != nil {
+		return err
+	}
+	if err := validateSeconds("client.dial_timeout", cfg.Client.DialTimeout); err != nil {
+		return err
+	}
 	if cfg.Client.ConnectionPool < 1 || cfg.Client.ConnectionPool > maxConnectionPool {
 		return fmt.Errorf("client.connection_pool must be between 1 and %d", maxConnectionPool)
 	}
@@ -105,6 +121,13 @@ func ValidateConfig(cfg *config.Config) error {
 	}
 	if err := validateWeb("client", cfg.Client.WebPort, cfg.Client.WebBindAddr, cfg.Client.WebUsername, cfg.Client.WebPassword); err != nil {
 		return err
+	}
+	return nil
+}
+
+func validateSeconds(field string, seconds int) error {
+	if seconds < 1 || seconds > maxIntervalSeconds {
+		return fmt.Errorf("%s must be between 1 and %d seconds", field, maxIntervalSeconds)
 	}
 	return nil
 }
