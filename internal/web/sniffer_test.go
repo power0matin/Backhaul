@@ -6,6 +6,8 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -199,5 +201,56 @@ func TestMonitorLabelsHostAndProcessMetrics(t *testing.T) {
 		if !strings.Contains(html, want) {
 			t.Errorf("monitor page missing %q", want)
 		}
+	}
+}
+
+
+func TestWriteUsageDataAtomically(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "usage.json")
+
+	first := []byte(`[{"Port":1,"Usage":2}]`)
+	if err := writeUsageDataAtomically(path, first); err != nil {
+		t.Fatalf("write initial snapshot: %v", err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat snapshot: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("snapshot permissions = %o, want 600", got)
+	}
+
+	second := []byte(`[{"Port":2,"Usage":3}]`)
+	if err := writeUsageDataAtomically(path, second); err != nil {
+		t.Fatalf("replace snapshot: %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read snapshot: %v", err)
+	}
+	if string(got) != string(second) {
+		t.Fatalf("snapshot = %s, want %s", got, second)
+	}
+	leftovers, err := filepath.Glob(filepath.Join(dir, ".usage.json.*.tmp"))
+	if err != nil {
+		t.Fatalf("glob temporary files: %v", err)
+	}
+	if len(leftovers) != 0 {
+		t.Fatalf("staging files left behind: %v", leftovers)
+	}
+}
+
+func TestStatsResponseUsesServerErrorWhenCollectionFails(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	err := writeStatsResponse(recorder, nil, errors.New("metrics source unavailable"))
+	if err == nil {
+		t.Fatal("writeStatsResponse returned no error for failed collection")
+	}
+	if recorder.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusInternalServerError)
+	}
+	if !strings.Contains(recorder.Body.String(), "failed to collect system stats") {
+		t.Fatalf("unexpected error response body: %q", recorder.Body.String())
 	}
 }

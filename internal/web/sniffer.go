@@ -11,6 +11,7 @@ import (
 	stdnet "net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"runtime"
 	"sort"
 	"strconv"
@@ -275,16 +276,23 @@ func (m *Usage) handleData(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func writeStatsResponse(w http.ResponseWriter, stats *SystemStats, statsErr error) error {
+	if statsErr != nil {
+		http.Error(w, "failed to collect system stats", http.StatusInternalServerError)
+		return statsErr
+	}
+	w.Header().Set("Content-Type", "application/json")
+	return json.NewEncoder(w).Encode(stats)
+}
+
 func (m *Usage) statsHandler(w http.ResponseWriter, r *http.Request) {
 	stats, err := m.getSystemStats()
-	if err != nil {
-		m.logger.Error("Error fetching system stats:", err)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(stats); err != nil {
-		m.logger.Error("Error encoding JSON:", err)
+	if writeErr := writeStatsResponse(w, stats, err); writeErr != nil {
+		if err != nil {
+			m.logger.Error("Error fetching system stats:", err)
+		} else {
+			m.logger.Error("Error encoding JSON:", writeErr)
+		}
 	}
 }
 
@@ -304,6 +312,36 @@ func (m *Usage) AddOrUpdatePort(port int, usage uint64) {
 		m.dataStore.Store(port, PortUsage{Port: port, Usage: usage})
 	}
 	m.totalTraffic.Add(usage)
+}
+
+// writeUsageDataAtomically writes a private staging file beside path and renames
+// it over the target only after the complete JSON snapshot has been flushed.
+func writeUsageDataAtomically(path string, data []byte) error {
+	dir := filepath.Dir(path)
+	pattern := "." + filepath.Base(path) + ".*.tmp"
+	file, err := os.CreateTemp(dir, pattern)
+	if err != nil {
+		return err
+	}
+	tmpPath := file.Name()
+	defer os.Remove(tmpPath)
+
+	if err := file.Chmod(0600); err != nil {
+		_ = file.Close()
+		return err
+	}
+	if _, err := file.Write(data); err != nil {
+		_ = file.Close()
+		return err
+	}
+	if err := file.Sync(); err != nil {
+		_ = file.Close()
+		return err
+	}
+	if err := file.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, path)
 }
 
 func (m *Usage) saveUsageData() {
@@ -363,8 +401,9 @@ func (m *Usage) saveUsageData() {
 		return
 	}
 
-	// Step 6: Write JSON data to file
-	err = os.WriteFile(m.snifferLog, data, 0600)
+	// Step 6: Replace the persisted snapshot atomically so a process crash cannot
+	// leave a truncated JSON file that blocks all subsequent persistence.
+	err = writeUsageDataAtomically(m.snifferLog, data)
 	if err != nil {
 		m.restoreUsageData(currentUsageData)
 		m.logger.Errorf("error writing usage data to file: %v", err)
