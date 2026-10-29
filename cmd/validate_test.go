@@ -147,6 +147,37 @@ func TestSecurityAndPoolDefaults(t *testing.T) {
 	}
 }
 
+func TestValidateServerTransportOptions(t *testing.T) {
+	tests := []struct {
+		name          string
+		transport     config.TransportType
+		acceptUDP     bool
+		proxyProtocol bool
+		wantErr       bool
+	}{
+		{name: "tcp supports both options", transport: config.TCP, acceptUDP: true, proxyProtocol: true},
+		{name: "tcpmux supports proxy protocol", transport: config.TCPMUX, proxyProtocol: true},
+		{name: "wsmux supports proxy protocol", transport: config.WSMUX, proxyProtocol: true},
+		{name: "wssmux supports proxy protocol", transport: config.WSSMUX, proxyProtocol: true},
+		{name: "udp rejects accept udp", transport: config.UDP, acceptUDP: true, wantErr: true},
+		{name: "tcpmux rejects accept udp", transport: config.TCPMUX, acceptUDP: true, wantErr: true},
+		{name: "ws rejects proxy protocol", transport: config.WS, proxyProtocol: true, wantErr: true},
+		{name: "wss rejects proxy protocol", transport: config.WSS, proxyProtocol: true, wantErr: true},
+		{name: "udp rejects proxy protocol", transport: config.UDP, proxyProtocol: true, wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateServerTransportOptions(tt.transport, tt.acceptUDP, tt.proxyProtocol)
+			if tt.wantErr && err == nil {
+				t.Fatal("expected unsupported option combination to fail")
+			}
+			if !tt.wantErr && err != nil {
+				t.Fatalf("supported option combination rejected: %v", err)
+			}
+		})
+	}
+}
+
 func TestValidatePortMapping(t *testing.T) {
 	valid := []string{
 		"443-600",
