@@ -26,6 +26,7 @@ type TcpTransport struct {
 	cancel         context.CancelFunc
 	logger         *logrus.Logger
 	tunnelChannel  chan net.Conn
+	handshakeChannel chan net.Conn
 	localChannel   chan LocalTCPConn
 	reqNewConnChan chan struct{}
 	controlChannel net.Conn
@@ -72,6 +73,7 @@ func NewTCPServer(parentCtx context.Context, config *TcpConfig, logger *logrus.L
 		cancel:         cancel,
 		logger:         logger,
 		tunnelChannel:  make(chan net.Conn, config.ChannelSize),
+		handshakeChannel: make(chan net.Conn, config.ChannelSize),
 		localChannel:   make(chan LocalTCPConn, config.ChannelSize),
 		reqNewConnChan: make(chan struct{}, config.ChannelSize),
 		controlChannel: nil, // will be set when a control connection is established
@@ -132,55 +134,95 @@ func (s *TcpTransport) Restart() {
 }
 
 func (s *TcpTransport) channelHandshake() {
+	ready := make(chan struct{}, 1)
+	workers := make(chan struct{}, maxConcurrentControlHandshakes)
 	for {
 		select {
 		case <-s.ctx.Done():
+			s.closePendingHandshakes()
 			return
-		case conn := <-s.tunnelChannel:
-			// Set a read deadline for the token response
-			if err := conn.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
-				s.logger.Errorf("failed to set read deadline: %v", err)
-				conn.Close()
-				continue
-			}
-
-			msg, transport, err := utils.ReceiveBinaryTransportString(conn)
-			if err != nil {
-				if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-					s.logger.Warn("timeout while waiting for control channel signal")
-				} else {
-					s.logger.Errorf("failed to receive control channel signal: %v", err)
-				}
-				conn.Close() // Close connection on error or timeout
-				continue
-			}
-			if transport != utils.SG_Chan {
-				s.logger.Errorf("invalid signal received for channel, discarding connection")
-				conn.Close()
-				continue
-			}
-
-			// Resetting the deadline (removes any existing deadline)
-			conn.SetReadDeadline(time.Time{})
-
-			if !utils.SecureTokenEqual(msg, s.config.Token) {
-				s.logger.Warn("invalid security token received")
-				conn.Close()
-				continue
-			}
-
-			err = utils.SendBinaryTransportString(conn, s.config.Token, utils.SG_Chan)
-			if err != nil {
-				s.logger.Errorf("failed to send security token: %v", err)
-				conn.Close()
-				continue
-			}
-
-			s.setControlChannel(conn)
-
+		case <-ready:
+			s.closePendingHandshakes()
 			s.logger.Info("control channel successfully established.")
 			return
+		case conn := <-s.handshakeChannel:
+			select {
+			case workers <- struct{}{}:
+				go func(conn net.Conn) {
+					defer func() { <-workers }()
+					keep := false
+					defer func() {
+						if !keep {
+							_ = conn.Close()
+						}
+					}()
+					stopClose := context.AfterFunc(s.ctx, func() { _ = conn.Close() })
+					defer stopClose()
+
+					if !readControlHandshake(conn, s.config.Token, s.logger) {
+						return
+					}
+					if !s.trySetControlChannel(conn) {
+						return
+					}
+					if !writeControlHandshakeResponse(conn, s.config.Token, s.logger) {
+						s.clearControlChannel(conn)
+						return
+					}
+					keep = true
+					select {
+					case ready <- struct{}{}:
+					default:
+					}
+				}(conn)
+			default:
+				_ = conn.Close()
+			}
 		}
+	}
+}
+
+func (s *TcpTransport) enqueueAcceptedConnection(conn net.Conn) bool {
+	s.controlMu.Lock()
+	defer s.controlMu.Unlock()
+	target := s.tunnelChannel
+	if s.controlChannel == nil {
+		target = s.handshakeChannel
+	}
+	select {
+	case target <- conn:
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *TcpTransport) closePendingHandshakes() {
+	for {
+		select {
+		case conn := <-s.handshakeChannel:
+			_ = conn.Close()
+		default:
+			return
+		}
+	}
+}
+
+func (s *TcpTransport) trySetControlChannel(conn net.Conn) bool {
+	s.controlMu.Lock()
+	defer s.controlMu.Unlock()
+	if s.controlChannel != nil {
+		return false
+	}
+	s.controlChannel = conn
+	return true
+}
+
+func (s *TcpTransport) clearControlChannel(conn net.Conn) {
+	s.controlMu.Lock()
+	defer s.controlMu.Unlock()
+	if s.controlChannel == conn {
+		s.controlChannel = nil
 	}
 }
 
@@ -346,13 +388,11 @@ func (s *TcpTransport) acceptTunnelConn(listener net.Listener) {
 				s.logger.Warnf("failed to set TCP keep-alive period for %s: %v", tcpConn.RemoteAddr().String(), err)
 			}
 
-			select {
-			case s.tunnelChannel <- conn:
-			default: // The channel is full, do nothing
+			if !s.enqueueAcceptedConnection(conn) {
 				if total, logNow := s.usageMonitor.RecordRejected(); logNow {
-					s.logger.Warnf("tunnel channel full; rejecting connection from %s (total rejected/dropped=%d)", conn.RemoteAddr(), total)
+					s.logger.Warnf("tunnel/handshake channel full; rejecting connection from %s (total rejected/dropped=%d)", conn.RemoteAddr(), total)
 				}
-				conn.Close()
+				_ = conn.Close()
 			}
 		}
 	}

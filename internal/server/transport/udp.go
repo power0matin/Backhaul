@@ -108,75 +108,106 @@ func (s *UdpTransport) channelHandshake() {
 		go s.Restart()
 		return
 	}
-
 	s.logger.Infof("server started successfully, listening on address: %s", listener.Addr().String())
-
 	defer listener.Close()
 	stopClose := context.AfterFunc(s.ctx, func() { _ = listener.Close() })
 	defer stopClose()
 
+	accepted := make(chan net.Conn, maxConcurrentControlHandshakes)
+	stopAccept := make(chan struct{})
+	var stopAcceptOnce sync.Once
+	stopAcceptor := func() { stopAcceptOnce.Do(func() { close(stopAccept) }) }
+	defer stopAcceptor()
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				select {
+				case <-s.ctx.Done():
+					return
+				case <-stopAccept:
+					return
+				default:
+					s.logger.Debugf("failed to accept control channel connection on %s: %v", listener.Addr().String(), err)
+					continue
+				}
+			}
+			select {
+			case accepted <- conn:
+			case <-s.ctx.Done():
+				_ = conn.Close()
+				return
+			case <-stopAccept:
+				_ = conn.Close()
+				return
+			}
+		}
+	}()
+
+	ready := make(chan struct{}, 1)
+	workers := make(chan struct{}, maxConcurrentControlHandshakes)
+	var controlMu sync.Mutex
 loop:
 	for {
 		select {
 		case <-s.ctx.Done():
 			return
-		default:
-			conn, err := listener.Accept()
-			if err != nil {
-				if s.ctx.Err() != nil {
-					return
-				}
-				s.logger.Debugf("failed to accept control channel connection on %s: %v", listener.Addr().String(), err)
-				continue
-			}
-
-			// Set a read deadline for the token response
-			if err := conn.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
-				s.logger.Errorf("failed to set read deadline: %v", err)
-				conn.Close()
-				continue
-			}
-
-			msg, transport, err := utils.ReceiveBinaryTransportString(conn)
-			if err != nil {
-				if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-					s.logger.Warn("timeout while waiting for control channel signal")
-				} else {
-					s.logger.Errorf("failed to receive control channel signal: %v", err)
-				}
-				conn.Close() // Close connection on error or timeout
-				continue
-			}
-			if transport != utils.SG_Chan {
-				s.logger.Errorf("invalid signal received for channel, discarding connection")
-				conn.Close()
-				continue
-			}
-
-			// Resetting the deadline (removes any existing deadline)
-			conn.SetReadDeadline(time.Time{})
-
-			if !utils.SecureTokenEqual(msg, s.config.Token) {
-				s.logger.Warn("invalid security token received")
-				conn.Close()
-				continue
-			}
-
-			err = utils.SendBinaryTransportString(conn, s.config.Token, utils.SG_Chan)
-			if err != nil {
-				s.logger.Errorf("failed to send security token: %v", err)
-				conn.Close()
-				continue
-			}
-
-			s.controlChannel = conn
-			s.usageMonitor.SetTunnelStatus("Connected (UDP)")
-
-			s.logger.Info("control channel successfully established.")
-
+		case <-ready:
 			break loop
+		case conn := <-accepted:
+			select {
+			case workers <- struct{}{}:
+				go func(conn net.Conn) {
+					defer func() { <-workers }()
+					keep := false
+					defer func() {
+						if !keep {
+							_ = conn.Close()
+						}
+					}()
+					stopConnClose := context.AfterFunc(s.ctx, func() { _ = conn.Close() })
+					defer stopConnClose()
+
+					if !readControlHandshake(conn, s.config.Token, s.logger) {
+						return
+					}
+					controlMu.Lock()
+					if s.controlChannel != nil {
+						controlMu.Unlock()
+						return
+					}
+					s.controlChannel = conn
+					if !writeControlHandshakeResponse(conn, s.config.Token, s.logger) {
+						s.controlChannel = nil
+						controlMu.Unlock()
+						return
+					}
+					controlMu.Unlock()
+					keep = true
+					select {
+					case ready <- struct{}{}:
+					default:
+					}
+				}(conn)
+			default:
+				_ = conn.Close()
+			}
 		}
 	}
+
+	stopAcceptor()
+	_ = listener.Close()
+	for {
+		select {
+		case conn := <-accepted:
+			_ = conn.Close()
+		default:
+			goto acceptedDrained
+		}
+	}
+acceptedDrained:
+	s.usageMonitor.SetTunnelStatus("Connected (UDP)")
+	s.logger.Info("control channel successfully established.")
 
 	go s.tunnelListener()
 	go s.parsePortMappings()
