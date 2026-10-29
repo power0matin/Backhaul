@@ -147,9 +147,8 @@ To start using the solution, you'll need to configure both server and client com
     log_level = "info"            # Log level ("panic", "fatal", "error", "warn", "info", "debug", "trace", optional, default: "info").
     skip_optz = true              # Skip host-wide sysctl tuning (default when omitted; set false to opt in)
 
-// Backhaul's Linux TCP tuning changes host-wide sysctl values. If this key is
-// omitted it is treated as true; explicitly set skip_optz = false only when
-// you intend those system-level changes.
+# Linux TCP tuning changes host-wide sysctl values. If this key is omitted it
+# is treated as true; set skip_optz = false only when you intend those changes.
     mss = 1360                    # TCP/TCPMux: Maximum Segment Size in bytes; controls max TCP payload size to avoid fragmentation. (default: system-defined)
     so_rcvbuf = 4194304           # TCP/TCPMux: Socket receive buffer size (bytes); larger buffer allows higher throughput on receive side. (default: system-defined)
     so_sndbuf = 1048576           # TCP/TCPMux: Socket send buffer size (bytes); controls send queue size to manage outgoing data flow. (default: system-defined)
