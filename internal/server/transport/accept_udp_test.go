@@ -192,3 +192,63 @@ func TestTCPToUDPForwardsZeroLengthDatagram(t *testing.T) {
 	}
 }
 
+
+func TestTCPToUDPForwardsLargeDatagramWithoutTruncation(t *testing.T) {
+	receiver, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer receiver.Close()
+	if err := receiver.SetReadDeadline(time.Now().Add(3 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+
+	sender, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sender.Close()
+
+	left, right := net.Pipe()
+	logger := logrus.New()
+	logger.SetOutput(io.Discard)
+	flow := &LocalAcceptUDPConn{
+		listener:   sender,
+		clientAddr: receiver.LocalAddr().(*net.UDPAddr),
+	}
+	done := make(chan struct{})
+	go func() {
+		tcpToUDP(left, flow, logger, nil, 0, false, 100)
+		close(done)
+	}()
+
+	payload := make([]byte, 20*1024+17)
+	for i := range payload {
+		payload[i] = byte((i*31 + 7) % 251)
+	}
+	frame := make([]byte, 6+len(payload))
+	binary.BigEndian.PutUint32(frame[:4], uint32(time.Now().UnixMilli()%(10*60*1000)))
+	binary.BigEndian.PutUint16(frame[4:6], uint16(len(payload)))
+	copy(frame[6:], payload)
+	go func() { _, _ = right.Write(frame) }()
+
+	got := make([]byte, len(payload)+1)
+	n, _, err := receiver.ReadFromUDP(got)
+	if err != nil {
+		t.Fatalf("read large forwarded datagram: %v", err)
+	}
+	if n != len(payload) {
+		t.Fatalf("forwarded datagram length = %d, want %d", n, len(payload))
+	}
+	for i := range payload {
+		if got[i] != payload[i] {
+			t.Fatalf("payload differs at byte %d", i)
+		}
+	}
+	_ = right.Close()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("TCP-to-UDP handler did not stop after stream close")
+	}
+}

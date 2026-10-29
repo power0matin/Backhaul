@@ -13,7 +13,8 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-const BufferSize = 16 * 1024
+// BufferSize accommodates the full IPv4/IPv6 UDP payload range plus transport headers.
+const BufferSize = 65535
 
 const congestionTimestampWindowMillis int64 = 10 * 60 * 1000
 
@@ -53,6 +54,7 @@ func (s *TcpTransport) udpListener(localAddr string, remoteAddr string) {
 	activeConnections := map[string]*LocalAcceptUDPConn{}
 
 	// Buffer for UDP reads
+	// Maximum legal UDP payloads (including IPv6's 65,527-byte payload) fit without truncation.
 	buf := make([]byte, BufferSize-2) // 2 bytes reserved for header
 
 	// make a new channel for recieve udp packets
