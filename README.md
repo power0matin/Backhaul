@@ -178,6 +178,8 @@ To start using the solution, you'll need to configure both server and client com
    ```
 * **Client Configuration**
 
+   The server may listen on `0.0.0.0:PORT` to accept connections on all local interfaces. The client must instead use the server's reachable public IP address or hostname, for example `server.example.com:3080`; `0.0.0.0` is not a remote destination.
+
    Create a configuration file named `config.toml` for the client:
    ```toml
    [client]  # Behind NAT, firewall-blocked
