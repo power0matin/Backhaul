@@ -13,9 +13,12 @@ func WriteProxyProtocol(from, to net.Conn) error {
 	if !ok {
 		return fmt.Errorf("source connection address is not a TCP address")
 	}
-	dstAddr, ok := to.RemoteAddr().(*net.TCPAddr)
+	// The PROXY destination is the local endpoint originally accepted from the
+	// client. The tunnel stream's RemoteAddr describes the Backhaul peer, not
+	// the public/local forwarding endpoint the application needs to see.
+	dstAddr, ok := from.LocalAddr().(*net.TCPAddr)
 	if !ok {
-		return fmt.Errorf("destination connection address is not a TCP address")
+		return fmt.Errorf("source connection local address is not a TCP address")
 	}
 
 	header, err := buildProxyProtocolV2Header(srcAddr.IP.String(), dstAddr.IP.String(), srcAddr.Port, dstAddr.Port)
