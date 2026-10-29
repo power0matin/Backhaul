@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"os"
 
@@ -36,6 +37,9 @@ func RunConfig(cfg *config.Config, ctx context.Context) error {
 	}
 
 	if cfg.Server.BindAddr != "" {
+		if err := validateServerTLSFiles(&cfg.Server); err != nil {
+			return err
+		}
 		warnSecurityDefaults("server", cfg.Server.Token, cfg.Server.WebPort, cfg.Server.WebBindAddr, cfg.Server.WebUsername)
 		// Apply temporary TCP optimizations at startup
 		if !cfg.Server.SkipOptz {
@@ -64,6 +68,16 @@ func RunConfig(cfg *config.Config, ctx context.Context) error {
 	return fmt.Errorf("neither server nor client configuration is properly set")
 }
 
+func validateServerTLSFiles(cfg *config.ServerConfig) error {
+	if cfg.Transport != config.WSS && cfg.Transport != config.WSSMUX {
+		return nil
+	}
+	if _, err := tls.LoadX509KeyPair(cfg.TLSCertFile, cfg.TLSKeyFile); err != nil {
+		return fmt.Errorf("server TLS certificate/key could not be loaded or do not match: %w", err)
+	}
+	return nil
+}
+
 func warnSecurityDefaults(role, token string, webPort int, webBindAddr, webUsername string) {
 	if token == defaultToken {
 		logger.Warnf("%s is using the default authentication token; configure an explicit token", role)
@@ -81,8 +95,16 @@ func warnSecurityDefaults(role, token string, webPort int, webBindAddr, webUsern
 // LoadConfig loads, defaults, and validates a TOML configuration file.
 func LoadConfig(configPath string) (*config.Config, error) {
 	var cfg config.Config
-	if _, err := toml.DecodeFile(configPath, &cfg); err != nil {
+	metadata, err := toml.DecodeFile(configPath, &cfg)
+	if err != nil {
 		return &cfg, err
+	}
+	if undecoded := metadata.Undecoded(); len(undecoded) > 0 {
+		return &cfg, fmt.Errorf("unknown configuration key(s): %v; check spelling and Backhaul version compatibility", undecoded)
+	}
+	// Preserve an explicit false, but make omitted WSS verification secure by default.
+	if !metadata.IsDefined("client", "tls_verify") {
+		cfg.Client.TLSVerify = true
 	}
 	applyDefaults(&cfg)
 	if err := ValidateConfig(&cfg); err != nil {

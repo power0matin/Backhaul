@@ -126,7 +126,7 @@ To start using the solution, you'll need to configure both server and client com
     bind_addr = "0.0.0.0:3080"    # Address and port for the server to listen on (mandatory).
     transport = "tcp"             # Protocol to use ("tcp", "tcpmux", "ws", "wss", "wsmux", "wssmux". mandatory).
     accept_udp = false             # Enable transferring UDP connections over TCP transport. (optional, default: false)
-    token = "your_token"          # Authentication token for secure communication (optional).
+    token = "your_token"          # Shared strong secret; required and identical on server and client.
     keepalive_period = 75         # Interval in seconds to send keep-alive packets.(optional, default: 75s)
     nodelay = false               # Enable TCP_NODELAY (optional, default: false).
     channel_size = 2048           # Bounded tunnel/local queue size. Brief saturation gets bounded backpressure; persistent overload is rejected. (optional, default: 2048).
@@ -176,10 +176,10 @@ To start using the solution, you'll need to configure both server and client com
    Create a configuration file named `config.toml` for the client:
    ```toml
    [client]  # Behind NAT, firewall-blocked
-   remote_addr = "0.0.0.0:3080"  # Server address and port (mandatory).
+   remote_addr = "server.example.com:3080"  # Server address and port (mandatory).
    edge_ip = "188.114.96.0"      # Edge IP used for CDN connection, specifically for WebSocket-based transports.(Optional, default none)
    transport = "tcp"             # Protocol to use ("tcp", "tcpmux", "ws", "wss", "wsmux", "wssmux". mandatory).
-   token = "your_token"          # Authentication token for secure communication (optional).
+   token = "your_token"          # Shared strong secret; required and identical on server and client.
    connection_pool = 8           # Number of pre-established connections.(optional, default: 8).
    max_pool_size = 32            # Upper bound for adaptive pool growth. If omitted, derived from connection_pool.
    aggressive_pool = false       # Enables aggressive connection pool management.(optional, default: false).
@@ -235,7 +235,7 @@ To start using the solution, you'll need to configure both server and client com
 
    ```toml
    [client]
-   remote_addr = "0.0.0.0:3080"
+   remote_addr = "server.example.com:3080"
    transport = "tcp"
    token = "your_token" 
    connection_pool = 8
@@ -325,7 +325,7 @@ There are two intentional operational changes:
 
    ```toml
    [client]
-   remote_addr = "0.0.0.0:3080"
+   remote_addr = "server.example.com:3080"
    transport = "tcpmux"
    token = "your_token" 
    connection_pool = 8
@@ -369,7 +369,7 @@ There are two intentional operational changes:
 
    ```toml
    [client]
-   remote_addr = "0.0.0.0:3080"
+   remote_addr = "server.example.com:3080"
    transport = "udp"
    token = "your_token" 
    connection_pool = 8
@@ -405,7 +405,7 @@ There are two intentional operational changes:
 
    ```toml
    [client]
-   remote_addr = "0.0.0.0:8080"
+   remote_addr = "server.example.com:8080"
    edge_ip = "" 
    transport = "ws"
    token = "your_token" 
@@ -426,6 +426,8 @@ There are two intentional operational changes:
    * Refer to TCP configuration for more information.
 
 #### Secure WebSocket Configuration
+
+For WSS clients, `client.tls_verify` defaults to `true` when omitted. Keep certificate verification enabled on public networks; set it to `false` only for a deliberate, restricted setup that accepts an untrusted certificate.
 * **Server**:
 
    ```toml
@@ -449,7 +451,7 @@ There are two intentional operational changes:
 
    ```toml
    [client]
-   remote_addr = "0.0.0.0:8443"
+   remote_addr = "server.example.com:8443"
    edge_ip = "" 
    transport = "wss"
    token = "your_token" 
@@ -496,7 +498,7 @@ There are two intentional operational changes:
 
    ```toml
    [client]
-   remote_addr = "0.0.0.0:3080"
+   remote_addr = "server.example.com:3080"
    edge_ip = "" 
    transport = "wsmux"
    token = "your_token" 
@@ -545,7 +547,7 @@ There are two intentional operational changes:
 
    ```toml
    [client]
-   remote_addr = "0.0.0.0:443"
+   remote_addr = "server.example.com:443"
    edge_ip = "" 
    transport = "wssmux"
    token = "your_token" 
