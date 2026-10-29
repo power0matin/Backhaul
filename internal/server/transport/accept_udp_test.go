@@ -252,3 +252,18 @@ func TestTCPToUDPForwardsLargeDatagramWithoutTruncation(t *testing.T) {
 		t.Fatal("TCP-to-UDP handler did not stop after stream close")
 	}
 }
+
+func TestCongestedAcceptUDPFlowRetainsFlowSlot(t *testing.T) {
+	flow := &LocalAcceptUDPConn{}
+	if isCongestedAcceptUDPFlow(flow) {
+		t.Fatal("new flow was incorrectly treated as congested")
+	}
+	flow.isCongested.Store(true)
+	if !isCongestedAcceptUDPFlow(flow) {
+		t.Fatal("congested flow was not identified for drop-without-replacement")
+	}
+	if got, want := acceptUDPFlowInactivityTimeout, 30*time.Second; got != want {
+		t.Fatalf("flow inactivity timeout = %s, want %s", got, want)
+	}
+}
+

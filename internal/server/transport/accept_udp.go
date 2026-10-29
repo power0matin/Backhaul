@@ -16,6 +16,11 @@ import (
 // BufferSize accommodates the full IPv4/IPv6 UDP payload range plus transport headers.
 const BufferSize = 65535
 
+// Congested UDP-over-TCP flows remain in activeConnections while their queued
+// data drains. The limit therefore includes draining flows until this timeout
+// closes the handler and releases its map entry.
+const acceptUDPFlowInactivityTimeout = 30 * time.Second
+
 const congestionTimestampWindowMillis int64 = 10 * 60 * 1000
 
 // packetAgeMillis calculates the age for the compact modulo timestamp used by
@@ -31,6 +36,10 @@ func packetAgeMillis(nowMillis, packetMillis int64) int64 {
 		age += congestionTimestampWindowMillis
 	}
 	return age
+}
+
+func isCongestedAcceptUDPFlow(flow *LocalAcceptUDPConn) bool {
+	return flow != nil && flow.isCongested.Load()
 }
 
 func (s *TcpTransport) udpListener(localAddr string, remoteAddr string) {
@@ -87,14 +96,14 @@ func (s *TcpTransport) udpListener(localAddr string, remoteAddr string) {
 				mu.Lock()
 				// Check if the connection is already active
 				if existingConn, exists := activeConnections[key]; exists {
-					if existingConn.isCongested.Load() {
-						s.logger.Debugf("connection with timestamp %d congested. Removing %s from active connections due to network congestion", existingConn.timeCreated, addr.String())
-						// For congested connections, closing the payload channel immediately can cause abrupt TCP disconnection,
-						// potentially leading to data loss. Instead, allow the connection to keep transferring data for 30 more
-						// seconds (or until the payload channel becomes idle). The timer will close the TCP connection once it
-						// times out. Further testing is needed to confirm this strategy's effect on overall performance and congestion handling.
-
-						delete(activeConnections, key)
+					if isCongestedAcceptUDPFlow(existingConn) {
+						// Keep the draining flow in the map so it continues counting
+						// against udp_max_flows. Drop new packets from this tuple until
+						// the old handler exits; do not create replacement tunnels.
+						s.logger.Debugf("congested UDP flow from %s is draining; dropping packet while it retains its flow slot", addr.String())
+						mu.Unlock()
+						recordRejected(s.usageMonitor, s.logger, "congested UDP flow is draining; dropping replacement packet")
+						continue
 					} else {
 						// If it exists, send the payload to the existing connection's payload channel
 						if s.udpBudget.enqueueFramedUDP(existingConn.payload, buf[:n]) {
@@ -254,7 +263,7 @@ func UDPConnectionHandler(ctx context.Context, udp *LocalAcceptUDPConn, tcp net.
 }
 
 func udpToTCP(ctx context.Context, tcp net.Conn, udp *LocalAcceptUDPConn, logger *logrus.Logger, usage *web.Usage, remotePort int, sniffer bool, budget *packetBudget) {
-	inactivityTimeout := 60 * time.Second // Define a 60-second inactivity timeout
+	inactivityTimeout := acceptUDPFlowInactivityTimeout
 	idleTimer := time.NewTimer(inactivityTimeout)
 	defer idleTimer.Stop()
 
@@ -292,7 +301,7 @@ func udpToTCP(ctx context.Context, tcp net.Conn, udp *LocalAcceptUDPConn, logger
 			resetTimer(idleTimer, inactivityTimeout)
 
 		case <-idleTimer.C:
-			logger.Debugf("connection with timestamp %d and address %s idle for 60 seconds, closing", udp.timeCreated, udp.clientAddr.String())
+			logger.Debugf("connection with timestamp %d and address %s idle for %s, closing", udp.timeCreated, udp.clientAddr.String(), inactivityTimeout)
 			return
 		}
 	}
