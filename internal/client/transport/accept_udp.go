@@ -13,7 +13,8 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-const BufferSize = 16 * 1024
+// BufferSize accommodates the full IPv4/IPv6 UDP payload range plus transport headers.
+const BufferSize = 65535
 
 func UDPDialer(ctx context.Context, tcp net.Conn, remoteAddr string, logger *logrus.Logger, usage *web.Usage, remotePort int, sniffer bool) {
 	remoteUDPAddr, err := net.ResolveUDPAddr("udp", remoteAddr)

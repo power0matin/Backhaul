@@ -444,7 +444,8 @@ func (c *UdpTransport) localDialer(remoteAddr string, port int, tunConn *net.UDP
 }
 
 func (c *UdpTransport) udpCopy(srcConn, dstConn *net.UDPConn, port int) {
-	buf := make([]byte, 16*1024)
+	// A 65,535-byte read buffer is large enough for every legal UDP payload.
+	buf := make([]byte, 65535)
 	readTimeout := 60 * time.Second
 
 	for {
