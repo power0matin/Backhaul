@@ -39,6 +39,9 @@ func ValidateConfig(cfg *config.Config) error {
 		if err := validateTransport("server.transport", cfg.Server.Transport); err != nil {
 			return err
 		}
+		if err := validateServerTransportOptions(cfg.Server.Transport, cfg.Server.AcceptUDP, cfg.Server.ProxyProtocol); err != nil {
+			return err
+		}
 		if err := validateEndpoint("server.bind_addr", cfg.Server.BindAddr); err != nil {
 			return err
 		}
@@ -115,6 +118,21 @@ func validateToken(field, token string) error {
 	}
 	if len(token) > maxAuthTokenLength {
 		return fmt.Errorf("%s is %d bytes; maximum is %d for protocol framing", field, len(token), maxAuthTokenLength)
+	}
+	return nil
+}
+
+func validateServerTransportOptions(transport config.TransportType, acceptUDP, proxyProtocol bool) error {
+	if acceptUDP && transport != config.TCP {
+		return fmt.Errorf("server.accept_udp is supported only by the tcp transport; got %q", transport)
+	}
+	if proxyProtocol {
+		switch transport {
+		case config.TCP, config.TCPMUX, config.WSMUX, config.WSSMUX:
+			// These server implementations pass PROXY protocol options to their handlers.
+		default:
+			return fmt.Errorf("server.proxy_protocol is supported only by tcp, tcpmux, wsmux, and wssmux; got %q", transport)
+		}
 	}
 	return nil
 }

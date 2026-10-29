@@ -125,7 +125,8 @@ To start using the solution, you'll need to configure both server and client com
     [server]# Local, IRAN
     bind_addr = "0.0.0.0:3080"    # Address and port for the server to listen on (mandatory).
     transport = "tcp"             # Protocol to use ("tcp", "tcpmux", "ws", "wss", "wsmux", "wssmux". mandatory).
-    accept_udp = false             # Enable transferring UDP connections over TCP transport. (optional, default: false)
+    accept_udp = false             # Only supported by transport = "tcp". (optional, default: false)
+     proxy_protocol = false         # Only supported by tcp, tcpmux, wsmux, and wssmux.
     token = "your_token"          # Shared strong secret; required and identical on server and client.
     keepalive_period = 75         # Interval in seconds to send keep-alive packets.(optional, default: 75s)
     nodelay = false               # Enable TCP_NODELAY (optional, default: false).
