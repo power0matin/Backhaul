@@ -147,6 +147,37 @@ func TestSecurityAndPoolDefaults(t *testing.T) {
 	}
 }
 
+func TestValidateServerPortConflicts(t *testing.T) {
+	tests := []struct {
+		name    string
+		bind    string
+		webPort int
+		webHost string
+		ports   []string
+		wantErr bool
+	}{
+		{name: "duplicate wildcard ports", bind: "0.0.0.0:3080", ports: []string{"443", "443=8443"}, wantErr: true},
+		{name: "overlapping ranges", bind: "0.0.0.0:3080", ports: []string{"443-500", "500-600=700"}, wantErr: true},
+		{name: "mapping collides with control listener", bind: "0.0.0.0:3080", ports: []string{"3080"}, wantErr: true},
+		{name: "mapping collides with monitor", bind: "0.0.0.0:3080", webPort: 443, webHost: "127.0.0.1", ports: []string{"443"}, wantErr: true},
+		{name: "monitor collides with wildcard control bind", bind: "0.0.0.0:2060", webPort: 2060, webHost: "127.0.0.1", wantErr: true},
+		{name: "distinct explicit IPs may share a port", bind: "127.0.0.1:3080", ports: []string{"127.0.0.2:443=8443", "127.0.0.3:443=9443"}},
+		{name: "non-overlapping port ranges", bind: "0.0.0.0:3080", ports: []string{"443-450=8443", "500-510=9443"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &config.ServerConfig{BindAddr: tt.bind, Ports: tt.ports, WebPort: tt.webPort, WebBindAddr: tt.webHost}
+			err := validateServerPortConflicts(cfg)
+			if tt.wantErr && err == nil {
+				t.Fatal("expected local listener collision to be rejected")
+			}
+			if !tt.wantErr && err != nil {
+				t.Fatalf("non-conflicting listeners rejected: %v", err)
+			}
+		})
+	}
+}
+
 func TestValidateServerTransportOptions(t *testing.T) {
 	tests := []struct {
 		name          string

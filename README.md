@@ -157,15 +157,12 @@ To start using the solution, you'll need to configure both server and client com
     udp_queue_limit = 4096         # UDP/accept_udp queued packets across all flows. (optional, default: 4096; max: 16384)
     udp_max_flows = 2048           # Maximum simultaneously tracked UDP flows. (optional, default: 2048)
 
+    # Example rules only: local port ranges/listeners must not overlap.
+    # Choose mappings for your deployment and keep their local ports unique.
     ports = [
-    "443-600",                  # Listen on all ports in the range 443 to 600
-    "443-600=5201",             # Listen on all ports in the range 443 to 600 and forward traffic to 5201
-    "443-600=1.1.1.1:5201",     # Listen on all ports in the range 443 to 600 and forward traffic to 1.1.1.1:5201
-    "443",                      # Listen on local port 443 and forward to remote port 443 (default forwarding).
-    "4000=5000",                # Listen on local port 4000 (bind to all local IPs) and forward to remote port 5000.
-    "127.0.0.2:443=5201",       # Bind to specific local IP (127.0.0.2), listen on port 443, and forward to remote port 5201.
-    "443=1.1.1.1:5201",         # Listen on local port 443 and forward to a specific remote IP (1.1.1.1) on port 5201.
-    "127.0.0.2:443=1.1.1.1:5201",  # Bind to specific local IP (127.0.0.2), listen on port 443, and forward to remote IP (1.1.1.1) on port 5201.
+    "443-450=5201",             # Listen on 443–450 and forward to remote port 5201
+    "4000=5000",                # Listen on local port 4000 and forward to remote port 5000
+    "127.0.0.2:8443=5201",      # Bind specifically to 127.0.0.2:8443
    ]
 
     ```
