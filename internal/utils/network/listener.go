@@ -17,8 +17,8 @@ func ListenWithBuffers(network, address string, rcvBufSize, sndBufSize, mss int,
 	// Options
 	listenerCfg := &net.ListenConfig{
 		Control: func(network, address string, s syscall.RawConn) error {
-			// Set socket options for SO_REUSEADDR and SO_REUSEPORT
-			err := ReusePortControl(network, address, s)
+			// Set SO_REUSEADDR to allow safe rebinding after a previous connection closes
+			err := SocketControl(network, address, s)
 			if err != nil {
 				return err
 			}
