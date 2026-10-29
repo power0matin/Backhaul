@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/musix/backhaul/config"
 	"github.com/musix/backhaul/internal/client"
@@ -105,6 +106,20 @@ func LoadConfig(configPath string) (*config.Config, error) {
 	// Preserve an explicit false, but make omitted WSS verification secure by default.
 	if !metadata.IsDefined("client", "tls_verify") {
 		cfg.Client.TLSVerify = true
+	}
+	if (cfg.Server.BindAddr != "" && !metadata.IsDefined("server", "sniffer_log")) ||
+		(cfg.Client.RemoteAddr != "" && !metadata.IsDefined("client", "sniffer_log")) {
+		absoluteConfigPath, err := filepath.Abs(configPath)
+		if err != nil {
+			return &cfg, fmt.Errorf("resolve configuration path for default sniffer_log: %w", err)
+		}
+		defaultLogPath := filepath.Join(filepath.Dir(absoluteConfigPath), defaultSnifferLog)
+		if cfg.Server.BindAddr != "" && !metadata.IsDefined("server", "sniffer_log") {
+			cfg.Server.SnifferLog = defaultLogPath
+		}
+		if cfg.Client.RemoteAddr != "" && !metadata.IsDefined("client", "sniffer_log") {
+			cfg.Client.SnifferLog = defaultLogPath
+		}
 	}
 	// ApplyTCPTuning mutates host-wide sysctls; require an explicit opt-in.
 	if !metadata.IsDefined("server", "skip_optz") {

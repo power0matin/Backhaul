@@ -147,9 +147,20 @@ func validateTransport(field string, transport config.TransportType) error {
 }
 
 func validateEndpoint(field, value string) error {
-	_, portText, err := net.SplitHostPort(strings.TrimSpace(value))
+	if value != strings.TrimSpace(value) {
+		return fmt.Errorf("%s must not contain surrounding whitespace", field)
+	}
+	host, portText, err := net.SplitHostPort(value)
 	if err != nil {
 		return fmt.Errorf("%s must be host:port (IPv6 must be bracketed): %w", field, err)
+	}
+	if host == "" && field != "server.bind_addr" {
+		return fmt.Errorf("%s host must not be empty", field)
+	}
+	if host != "" {
+		if err := validateHostNameOrIP(field+" host", host); err != nil {
+			return err
+		}
 	}
 	port, err := strconv.Atoi(portText)
 	if err != nil || port < 1 || port > 65535 {
@@ -252,6 +263,11 @@ func validatePortMapping(mapping string) error {
 }
 
 func validateLocalMappingAddress(value string) error {
+	// A hyphen is valid in DNS hostnames; only interpret it as a range when the
+	// local side is a bare port/range without a host:port separator.
+	if strings.Contains(value, ":") {
+		return validateEndpoint("local bind", value)
+	}
 	if strings.Contains(value, "-") {
 		return validatePortOrRange(value)
 	}

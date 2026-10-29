@@ -142,7 +142,7 @@ To start using the solution, you'll need to configure both server and client com
     web_bind_addr = "127.0.0.1"   # Monitor bind address. Defaults to loopback in v0.8.0.
     web_username = "operator"     # Optional HTTP Basic username; set username and password together.
     web_password = "change-me"    # Optional HTTP Basic password.
-    sniffer_log ="/root/log.json" # Filename used to store network traffic and usage data logs. (optional, default backhaul.json)
+    sniffer_log ="/root/log.json" # Filename used to store network traffic and usage data logs. (optional, default: config directory/backhaul.json)
     tls_cert = "/root/server.crt" # Path to the TLS certificate file for wss/wssmux. (mandatory).
     tls_key = "/root/server.key"  # Path to the TLS private key file for wss/wssmux. (mandatory).
     log_level = "info"            # Log level ("panic", "fatal", "error", "warn", "info", "debug", "trace", optional, default: "info").
@@ -200,7 +200,7 @@ To start using the solution, you'll need to configure both server and client com
    web_bind_addr = "127.0.0.1"   # Monitor bind address. Defaults to loopback in v0.8.0.
    web_username = "operator"     # Optional HTTP Basic username; set both credentials together.
    web_password = "change-me"    # Optional HTTP Basic password.
-   sniffer_log ="/root/log.json" # Filename used to store network traffic and usage data logs. (optional, default backhaul.json)
+   sniffer_log ="/root/log.json" # Filename used to store network traffic and usage data logs. (optional, default: config directory/backhaul.json)
    log_level = "info"            # Log level ("panic", "fatal", "error", "warn", "info", "debug", "trace", optional, default: "info").
    skip_optz = true              # Skip optimizations performed by Backhaul (default: false)
    mss = 1360                    # TCP/TCPMux: Maximum Segment Size in bytes; controls max TCP payload size to avoid fragmentation. (default: system-defined)
