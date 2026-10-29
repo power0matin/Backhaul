@@ -89,6 +89,9 @@ func ValidateConfig(cfg *config.Config) error {
 				return fmt.Errorf("server.ports[%d] %q: %w", i, mapping, err)
 			}
 		}
+		if err := validateServerPortConflicts(&cfg.Server); err != nil {
+			return err
+		}
 		return nil
 	}
 
@@ -301,25 +304,111 @@ func validateLocalMappingAddress(value string) error {
 	return validateEndpoint("local bind", value)
 }
 
-func validatePortOrRange(value string) error {
+func parsePortRangeBounds(value string) (int, int, error) {
 	if !strings.Contains(value, "-") {
-		_, err := parsePort(value)
-		return err
+		port, err := parsePort(value)
+		return port, port, err
 	}
 	parts := strings.Split(value, "-")
 	if len(parts) != 2 {
-		return fmt.Errorf("invalid range %q", value)
+		return 0, 0, fmt.Errorf("invalid range %q", value)
 	}
 	start, err := parsePort(strings.TrimSpace(parts[0]))
 	if err != nil {
-		return err
+		return 0, 0, err
 	}
 	end, err := parsePort(strings.TrimSpace(parts[1]))
 	if err != nil {
-		return err
+		return 0, 0, err
 	}
 	if end < start {
-		return fmt.Errorf("range end %d is below start %d", end, start)
+		return 0, 0, fmt.Errorf("range end %d is below start %d", end, start)
+	}
+	return start, end, nil
+}
+
+func validatePortOrRange(value string) error {
+	_, _, err := parsePortRangeBounds(value)
+	return err
+}
+
+type localPortBinding struct {
+	name  string
+	host  string // empty means wildcard/all local interfaces
+	start int
+	end   int
+}
+
+func makeLocalPortBinding(name, value string) (localPortBinding, error) {
+	if strings.Contains(value, ":") {
+		host, portText, err := net.SplitHostPort(value)
+		if err != nil {
+			return localPortBinding{}, err
+		}
+		port, err := parsePort(portText)
+		if err != nil {
+			return localPortBinding{}, err
+		}
+		return localPortBinding{name: name, host: host, start: port, end: port}, nil
+	}
+	start, end, err := parsePortRangeBounds(value)
+	if err != nil {
+		return localPortBinding{}, err
+	}
+	return localPortBinding{name: name, start: start, end: end}, nil
+}
+
+// localHostsOverlap is conservative for hostnames because different DNS names
+// may resolve to the same local address at runtime.
+func localHostsOverlap(a, b string) bool {
+	a = strings.TrimSuffix(strings.ToLower(a), ".")
+	b = strings.TrimSuffix(strings.ToLower(b), ".")
+	if a == "" || b == "" || a == b {
+		return true
+	}
+	ipA, ipB := net.ParseIP(a), net.ParseIP(b)
+	if ipA != nil && ipB != nil {
+		return ipA.IsUnspecified() || ipB.IsUnspecified() || ipA.Equal(ipB)
+	}
+	return true
+}
+
+func portRangesOverlap(aStart, aEnd, bStart, bEnd int) bool {
+	return aStart <= bEnd && bStart <= aEnd
+}
+
+func validateServerPortConflicts(cfg *config.ServerConfig) error {
+	if cfg == nil {
+		return fmt.Errorf("server configuration is nil")
+	}
+	control, err := makeLocalPortBinding("server.bind_addr", cfg.BindAddr)
+	if err != nil {
+		return fmt.Errorf("parse server.bind_addr for conflict detection: %w", err)
+	}
+	bindings := []localPortBinding{control}
+	if cfg.WebPort > 0 {
+		bindings = append(bindings, localPortBinding{
+			name: "server.web_port", host: cfg.WebBindAddr, start: cfg.WebPort, end: cfg.WebPort,
+		})
+	}
+	for i, raw := range cfg.Ports {
+		local := strings.TrimSpace(strings.SplitN(raw, "=", 2)[0])
+		binding, err := makeLocalPortBinding(fmt.Sprintf("server.ports[%d] (%q)", i, local), local)
+		if err != nil {
+			return fmt.Errorf("parse server.ports[%d] for conflict detection: %w", i, err)
+		}
+		bindings = append(bindings, binding)
+	}
+	for i := 0; i < len(bindings); i++ {
+		for j := i + 1; j < len(bindings); j++ {
+			a, b := bindings[i], bindings[j]
+			if portRangesOverlap(a.start, a.end, b.start, b.end) && localHostsOverlap(a.host, b.host) {
+				start, end := a.start, a.end
+				if b.start > start { start = b.start }
+				if b.end < end { end = b.end }
+				return fmt.Errorf("%s conflicts with %s on overlapping local port range %d-%d", a.name, b.name, start, end)
+			}
+		}
 	}
 	return nil
 }
