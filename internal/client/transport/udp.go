@@ -470,15 +470,16 @@ func (c *UdpTransport) udpCopy(srcConn, dstConn *net.UDPConn, port int) {
 			return
 		}
 
-		totalWritten := 0
-		// Write the read data to the destination UDP connection
-		for totalWritten < n {
-			w, err := dstConn.Write(buf[totalWritten:n])
-			if err != nil {
-				c.logger.Errorf("failed to write to UDP %s: %v", dstConn.RemoteAddr().String(), err)
-				return
-			}
-			totalWritten += w
+		// One UDP Write preserves empty datagrams; retrying a short write as another
+		// write would create a second datagram instead of completing the first.
+		totalWritten, err := dstConn.Write(buf[:n])
+		if err != nil {
+			c.logger.Errorf("failed to write to UDP %s: %v", dstConn.RemoteAddr().String(), err)
+			return
+		}
+		if totalWritten != n {
+			c.logger.Errorf("short UDP write to %s: wrote %d of %d bytes", dstConn.RemoteAddr().String(), totalWritten, n)
+			return
 		}
 
 		// Optionally update the port usage stats if sniffing is enabled

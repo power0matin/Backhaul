@@ -357,15 +357,15 @@ func tcpToUDP(tcp net.Conn, udp *LocalAcceptUDPConn, logger *logrus.Logger, usag
 
 		// Forward the data to the UDP client address
 		if udp.clientAddr != nil {
-			totalWritten := 0
-			for totalWritten < packetSize {
-				w, err := udp.listener.WriteToUDP(buf[totalWritten:packetSize], udp.clientAddr)
-				if err != nil {
-					logger.Errorf("failed to forward TCP response to UDP client: %v", err)
-					return
-				}
-
-				totalWritten += w
+			// A single UDP write preserves empty datagrams and packet boundaries.
+			totalWritten, err := udp.listener.WriteToUDP(buf[:packetSize], udp.clientAddr)
+			if err != nil {
+				logger.Errorf("failed to forward TCP response to UDP client: %v", err)
+				return
+			}
+			if totalWritten != packetSize {
+				logger.Errorf("short UDP response write: wrote %d of %d bytes", totalWritten, packetSize)
+				return
 			}
 
 			if sniffer {

@@ -2,6 +2,7 @@ package transport
 
 import (
 	"context"
+	"encoding/binary"
 	"io"
 	"net"
 	"runtime"
@@ -137,3 +138,57 @@ func TestPacketAgeMillisHandlesTimestampWrap(t *testing.T) {
 		})
 	}
 }
+
+func TestTCPToUDPForwardsZeroLengthDatagram(t *testing.T) {
+	receiver, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer receiver.Close()
+	if err := receiver.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+
+	sender, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sender.Close()
+
+	left, right := net.Pipe()
+	logger := logrus.New()
+	logger.SetOutput(io.Discard)
+	flow := &LocalAcceptUDPConn{
+		listener:   sender,
+		clientAddr: receiver.LocalAddr().(*net.UDPAddr),
+	}
+	done := make(chan struct{})
+	go func() {
+		tcpToUDP(left, flow, logger, nil, 0, false, 100)
+		close(done)
+	}()
+
+	frame := make([]byte, 6) // 4-byte timestamp plus a 2-byte zero packet length
+	binary.BigEndian.PutUint32(frame[:4], uint32(time.Now().UnixMilli()%(10*60*1000)))
+	binary.BigEndian.PutUint16(frame[4:], 0)
+	if _, err := right.Write(frame); err != nil {
+		t.Fatalf("write zero-length UDP frame: %v", err)
+	}
+
+	buf := make([]byte, 1)
+	n, _, err := receiver.ReadFromUDP(buf)
+	if err != nil {
+		t.Fatalf("read forwarded empty datagram: %v", err)
+	}
+	if n != 0 {
+		t.Fatalf("forwarded datagram length = %d, want 0", n)
+	}
+
+	_ = right.Close()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("TCP-to-UDP handler did not stop after stream close")
+	}
+}
+

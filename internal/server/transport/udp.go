@@ -708,15 +708,15 @@ func (s *UdpTransport) udpLocalCopy(ctx context.Context, from *LocalUDPConn, to 
 
 			packetSize := len(data)
 
-			totalWritten := 0
-			for totalWritten < packetSize {
-				// Write the packet to the tunnel
-				w, err := to.listener.WriteToUDP(data[totalWritten:], to.addr)
-				if err != nil {
-					s.logger.Errorf("failed to write UDP payload to tunnel: %v", err)
-					return
-				}
-				totalWritten += w
+			// Write each packet exactly once so a zero-length UDP datagram is preserved.
+			totalWritten, err := to.listener.WriteToUDP(data, to.addr)
+			if err != nil {
+				s.logger.Errorf("failed to write UDP payload to tunnel: %v", err)
+				return
+			}
+			if totalWritten != packetSize {
+				s.logger.Errorf("short UDP write to tunnel: wrote %d of %d bytes", totalWritten, packetSize)
+				return
 			}
 
 			if s.config.Sniffer {
@@ -750,15 +750,15 @@ func (s *UdpTransport) udpTunnelCopy(ctx context.Context, from *TunnelUDPConn, t
 
 			packetSize := len(data)
 
-			totalWritten := 0
-			for totalWritten < packetSize {
-				// Write the packet to the tunnel
-				w, err := to.listener.WriteToUDP(data[totalWritten:], to.addr)
-				if err != nil {
-					s.logger.Errorf("failed to write UDP payload to tunnel: %v", err)
-					return
-				}
-				totalWritten += w
+			// Write each packet exactly once so a zero-length UDP datagram is preserved.
+			totalWritten, err := to.listener.WriteToUDP(data, to.addr)
+			if err != nil {
+				s.logger.Errorf("failed to write UDP payload to tunnel: %v", err)
+				return
+			}
+			if totalWritten != packetSize {
+				s.logger.Errorf("short UDP write to tunnel: wrote %d of %d bytes", totalWritten, packetSize)
+				return
 			}
 
 			if s.config.Sniffer {
