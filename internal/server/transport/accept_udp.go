@@ -15,6 +15,23 @@ import (
 
 const BufferSize = 16 * 1024
 
+const congestionTimestampWindowMillis int64 = 10 * 60 * 1000
+
+// packetAgeMillis calculates the age for the compact modulo timestamp used by
+// UDP-over-TCP framing. A negative delta means the timestamp wrapped while the
+// packet was in flight; invalid out-of-window values are treated as very old.
+func packetAgeMillis(nowMillis, packetMillis int64) int64 {
+	if packetMillis < 0 || packetMillis >= congestionTimestampWindowMillis {
+		return congestionTimestampWindowMillis
+	}
+	nowModulo := nowMillis % congestionTimestampWindowMillis
+	age := nowModulo - packetMillis
+	if age < 0 {
+		age += congestionTimestampWindowMillis
+	}
+	return age
+}
+
 func (s *TcpTransport) udpListener(localAddr string, remoteAddr string) {
 	localUDPAddr, err := net.ResolveUDPAddr("udp", localAddr)
 	if err != nil {
@@ -299,11 +316,8 @@ func tcpToUDP(tcp net.Conn, udp *LocalAcceptUDPConn, logger *logrus.Logger, usag
 		// 4-byte timestamp header
 		packetTimestamp := int64(binary.BigEndian.Uint32(timestampBuf))
 
-		// Get the current time and calculate the time difference
-		timestamp := time.Now().UnixMilli()
-		lastMillis := timestamp % (10 * 60 * 1000)
-
-		packetAge := lastMillis - packetTimestamp
+		// Compensate for the ten-minute timestamp wrap before evaluating congestion.
+		packetAge := packetAgeMillis(time.Now().UnixMilli(), packetTimestamp)
 
 		// If the packet age exceeds the threshold (3x RTT), flag the connection as congested
 		if packetAge > 3*rtt {
@@ -343,15 +357,15 @@ func tcpToUDP(tcp net.Conn, udp *LocalAcceptUDPConn, logger *logrus.Logger, usag
 
 		// Forward the data to the UDP client address
 		if udp.clientAddr != nil {
-			totalWritten := 0
-			for totalWritten < packetSize {
-				w, err := udp.listener.WriteToUDP(buf[totalWritten:packetSize], udp.clientAddr)
-				if err != nil {
-					logger.Errorf("failed to forward TCP response to UDP client: %v", err)
-					return
-				}
-
-				totalWritten += w
+			// A single UDP write preserves empty datagrams and packet boundaries.
+			totalWritten, err := udp.listener.WriteToUDP(buf[:packetSize], udp.clientAddr)
+			if err != nil {
+				logger.Errorf("failed to forward TCP response to UDP client: %v", err)
+				return
+			}
+			if totalWritten != packetSize {
+				logger.Errorf("short UDP response write: wrote %d of %d bytes", totalWritten, packetSize)
+				return
 			}
 
 			if sniffer {

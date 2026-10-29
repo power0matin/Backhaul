@@ -106,6 +106,13 @@ func LoadConfig(configPath string) (*config.Config, error) {
 	if !metadata.IsDefined("client", "tls_verify") {
 		cfg.Client.TLSVerify = true
 	}
+	// ApplyTCPTuning mutates host-wide sysctls; require an explicit opt-in.
+	if !metadata.IsDefined("server", "skip_optz") {
+		cfg.Server.SkipOptz = true
+	}
+	if !metadata.IsDefined("client", "skip_optz") {
+		cfg.Client.SkipOptz = true
+	}
 	applyDefaults(&cfg)
 	if err := ValidateConfig(&cfg); err != nil {
 		return &cfg, err

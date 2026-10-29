@@ -2,6 +2,7 @@ package transport
 
 import (
 	"context"
+	"encoding/binary"
 	"io"
 	"net"
 	"runtime"
@@ -116,3 +117,78 @@ func TestAcceptUDPCongestedFlowRemovedWhenHandlerEnds(t *testing.T) {
 		t.Fatal("completed congested UDP flow remained in active flow map")
 	}
 }
+
+
+func TestPacketAgeMillisHandlesTimestampWrap(t *testing.T) {
+	tests := []struct {
+		name         string
+		nowMillis    int64
+		packetMillis int64
+		wantAge      int64
+	}{
+		{name: "same window", nowMillis: 200_000, packetMillis: 199_000, wantAge: 1_000},
+		{name: "crosses ten minute wrap", nowMillis: 600_002, packetMillis: 599_999, wantAge: 3},
+		{name: "invalid timestamp", nowMillis: 42, packetMillis: 600_000, wantAge: congestionTimestampWindowMillis},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := packetAgeMillis(tt.nowMillis, tt.packetMillis); got != tt.wantAge {
+				t.Fatalf("packetAgeMillis(%d, %d) = %d, want %d", tt.nowMillis, tt.packetMillis, got, tt.wantAge)
+			}
+		})
+	}
+}
+
+func TestTCPToUDPForwardsZeroLengthDatagram(t *testing.T) {
+	receiver, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer receiver.Close()
+	if err := receiver.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+
+	sender, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sender.Close()
+
+	left, right := net.Pipe()
+	logger := logrus.New()
+	logger.SetOutput(io.Discard)
+	flow := &LocalAcceptUDPConn{
+		listener:   sender,
+		clientAddr: receiver.LocalAddr().(*net.UDPAddr),
+	}
+	done := make(chan struct{})
+	go func() {
+		tcpToUDP(left, flow, logger, nil, 0, false, 100)
+		close(done)
+	}()
+
+	frame := make([]byte, 6) // 4-byte timestamp plus a 2-byte zero packet length
+	binary.BigEndian.PutUint32(frame[:4], uint32(time.Now().UnixMilli()%(10*60*1000)))
+	binary.BigEndian.PutUint16(frame[4:], 0)
+	if _, err := right.Write(frame); err != nil {
+		t.Fatalf("write zero-length UDP frame: %v", err)
+	}
+
+	buf := make([]byte, 1)
+	n, _, err := receiver.ReadFromUDP(buf)
+	if err != nil {
+		t.Fatalf("read forwarded empty datagram: %v", err)
+	}
+	if n != 0 {
+		t.Fatalf("forwarded datagram length = %d, want 0", n)
+	}
+
+	_ = right.Close()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("TCP-to-UDP handler did not stop after stream close")
+	}
+}
+

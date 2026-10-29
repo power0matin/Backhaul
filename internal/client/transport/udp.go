@@ -359,7 +359,9 @@ func (c *UdpTransport) handleTunnelConn(tunConn *net.UDPConn) {
 	atomic.AddInt32(&c.poolConnections, 1)
 
 	// Prepare a buffer to receive the server's response
-	buffer := make([]byte, 47) // maximum buffer requried for store in IPv6:Port format
+	// A DNS hostname may be 253 bytes, followed by ':' and a five-digit port.
+	// 512 bytes also comfortably accommodates bracketed IPv6 endpoint strings.
+	buffer := make([]byte, 512)
 
 	for {
 		n, _, err := tunConn.ReadFromUDP(buffer)
@@ -468,15 +470,16 @@ func (c *UdpTransport) udpCopy(srcConn, dstConn *net.UDPConn, port int) {
 			return
 		}
 
-		totalWritten := 0
-		// Write the read data to the destination UDP connection
-		for totalWritten < n {
-			w, err := dstConn.Write(buf[totalWritten:n])
-			if err != nil {
-				c.logger.Errorf("failed to write to UDP %s: %v", dstConn.RemoteAddr().String(), err)
-				return
-			}
-			totalWritten += w
+		// One UDP Write preserves empty datagrams; retrying a short write as another
+		// write would create a second datagram instead of completing the first.
+		totalWritten, err := dstConn.Write(buf[:n])
+		if err != nil {
+			c.logger.Errorf("failed to write to UDP %s: %v", dstConn.RemoteAddr().String(), err)
+			return
+		}
+		if totalWritten != n {
+			c.logger.Errorf("short UDP write to %s: wrote %d of %d bytes", dstConn.RemoteAddr().String(), totalWritten, n)
+			return
 		}
 
 		// Optionally update the port usage stats if sniffing is enabled
