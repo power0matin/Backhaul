@@ -18,6 +18,7 @@ const (
 	maxConnectionPool  = 100_000
 	maxMuxConcurrency  = 4096
 	maxAuthTokenLength = 65_535
+	maxMuxBufferSize  = 256 << 20 // 256 MiB: bound per-role mux buffering
 )
 
 // ValidateConfig rejects values that would otherwise fail late in goroutines,
@@ -41,8 +42,8 @@ func ValidateConfig(cfg *config.Config) error {
 		if err := validateEndpoint("server.bind_addr", cfg.Server.BindAddr); err != nil {
 			return err
 		}
-		if len(cfg.Server.Token) > maxAuthTokenLength {
-			return fmt.Errorf("server.token is %d bytes; maximum is %d for protocol framing", len(cfg.Server.Token), maxAuthTokenLength)
+		if err := validateToken("server.token", cfg.Server.Token); err != nil {
+			return err
 		}
 		if cfg.Server.ChannelSize < 1 || cfg.Server.ChannelSize > maxChannelSize {
 			return fmt.Errorf("server.channel_size must be between 1 and %d", maxChannelSize)
@@ -87,8 +88,8 @@ func ValidateConfig(cfg *config.Config) error {
 	if err := validateEndpoint("client.remote_addr", cfg.Client.RemoteAddr); err != nil {
 		return err
 	}
-	if len(cfg.Client.Token) > maxAuthTokenLength {
-		return fmt.Errorf("client.token is %d bytes; maximum is %d for protocol framing", len(cfg.Client.Token), maxAuthTokenLength)
+	if err := validateToken("client.token", cfg.Client.Token); err != nil {
+		return err
 	}
 	if cfg.Client.ConnectionPool < 1 || cfg.Client.ConnectionPool > maxConnectionPool {
 		return fmt.Errorf("client.connection_pool must be between 1 and %d", maxConnectionPool)
@@ -101,6 +102,19 @@ func ValidateConfig(cfg *config.Config) error {
 	}
 	if err := validateWeb("client", cfg.Client.WebPort, cfg.Client.WebBindAddr, cfg.Client.WebUsername, cfg.Client.WebPassword); err != nil {
 		return err
+	}
+	return nil
+}
+
+func validateToken(field, token string) error {
+	if strings.TrimSpace(token) == "" {
+		return fmt.Errorf("%s is required; configure the same strong, unique secret on both endpoints", field)
+	}
+	if strings.TrimSpace(token) == defaultToken {
+		return fmt.Errorf("%s must not use the built-in insecure token %q; configure a strong, unique secret", field, defaultToken)
+	}
+	if len(token) > maxAuthTokenLength {
+		return fmt.Errorf("%s is %d bytes; maximum is %d for protocol framing", field, len(token), maxAuthTokenLength)
 	}
 	return nil
 }
@@ -141,6 +155,46 @@ func validateWeb(prefix string, port int, bindAddr, username, password string) e
 	}
 	if net.ParseIP(bindAddr) == nil && strings.Contains(bindAddr, ":") {
 		return fmt.Errorf("%s.web_bind_addr must not include a port", prefix)
+	}
+	if port > 0 {
+		if err := validateHostNameOrIP(prefix+".web_bind_addr", bindAddr); err != nil {
+			return err
+		}
+		if !isLoopbackBindAddress(bindAddr) && username == "" {
+			return fmt.Errorf("%s web monitor bound to non-loopback address %q requires web_username and web_password", prefix, bindAddr)
+		}
+	}
+	return nil
+}
+
+func isLoopbackBindAddress(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+// validateHostNameOrIP rejects malformed bind hosts before ListenAndServe starts
+// asynchronously. DNS resolution is deliberately left to the listener at runtime.
+func validateHostNameOrIP(field, host string) error {
+	if net.ParseIP(host) != nil {
+		return nil
+	}
+	host = strings.TrimSuffix(host, ".")
+	if host == "" || len(host) > 253 {
+		return fmt.Errorf("%s must be a valid hostname or IP address", field)
+	}
+	for _, label := range strings.Split(host, ".") {
+		if len(label) == 0 || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return fmt.Errorf("%s must be a valid hostname or IP address", field)
+		}
+		for _, ch := range label {
+			if !((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
+				(ch >= '0' && ch <= '9') || ch == '-') {
+				return fmt.Errorf("%s must be a valid hostname or IP address", field)
+			}
+		}
 	}
 	return nil
 }
@@ -231,11 +285,11 @@ func validateMux(prefix string, transport config.TransportType, version, frameSi
 	if frameSize < 1 || frameSize > 65535 {
 		return fmt.Errorf("%s.mux_framesize must be between 1 and 65535", prefix)
 	}
-	if receiveBuffer < 1 {
-		return fmt.Errorf("%s.mux_recievebuffer must be positive", prefix)
+	if receiveBuffer < 1 || receiveBuffer > maxMuxBufferSize {
+		return fmt.Errorf("%s.mux_recievebuffer must be between 1 and %d bytes", prefix, maxMuxBufferSize)
 	}
-	if streamBuffer < 1 || streamBuffer > receiveBuffer {
-		return fmt.Errorf("%s.mux_streambuffer must be positive and no larger than mux_recievebuffer", prefix)
+	if streamBuffer < 1 || streamBuffer > receiveBuffer || streamBuffer > maxMuxBufferSize {
+		return fmt.Errorf("%s.mux_streambuffer must be between 1 and mux_recievebuffer (maximum %d bytes)", prefix, maxMuxBufferSize)
 	}
 	return nil
 }

@@ -30,13 +30,8 @@ const ( // Default values
 )
 
 func applyDefaults(cfg *config.Config) {
-	// Token
-	if cfg.Server.Token == "" {
-		cfg.Server.Token = defaultToken
-	}
-	if cfg.Client.Token == "" {
-		cfg.Client.Token = defaultToken
-	}
+	// Authentication tokens are intentionally not defaulted: a shared, unique
+	// secret must be configured on both endpoints. Validation rejects omissions.
 
 	// Nodelay default is false if not valid value found
 

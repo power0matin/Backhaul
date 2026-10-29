@@ -1,6 +1,8 @@
 package cmd
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -74,6 +76,55 @@ func TestValidateConfig(t *testing.T) {
 		}
 	})
 
+
+	t.Run("missing authentication token", func(t *testing.T) {
+		cfg := validServerConfig()
+		cfg.Server.Token = ""
+		if err := ValidateConfig(cfg); err == nil {
+			t.Fatal("configuration without a shared authentication token was accepted")
+		}
+	})
+
+	t.Run("built-in authentication token is rejected", func(t *testing.T) {
+		cfg := validServerConfig()
+		cfg.Server.Token = defaultToken
+		if err := ValidateConfig(cfg); err == nil {
+			t.Fatal("configuration using the built-in token was accepted")
+		}
+	})
+
+	t.Run("non-loopback monitor requires authentication", func(t *testing.T) {
+		cfg := validServerConfig()
+		cfg.Server.WebPort = 2060
+		cfg.Server.WebBindAddr = "0.0.0.0"
+		if err := ValidateConfig(cfg); err == nil {
+			t.Fatal("public monitor without credentials was accepted")
+		}
+		cfg.Server.WebUsername = "operator"
+		cfg.Server.WebPassword = "strong-test-password"
+		if err := ValidateConfig(cfg); err != nil {
+			t.Fatalf("public monitor with paired credentials rejected: %v", err)
+		}
+	})
+
+	t.Run("invalid web bind hostname is rejected", func(t *testing.T) {
+		cfg := validServerConfig()
+		cfg.Server.WebPort = 2060
+		cfg.Server.WebBindAddr = "bad host"
+		if err := ValidateConfig(cfg); err == nil {
+			t.Fatal("web bind address containing whitespace was accepted")
+		}
+	})
+
+	t.Run("mux receive buffer upper bound", func(t *testing.T) {
+		cfg := validServerConfig()
+		cfg.Server.Transport = config.TCPMUX
+		cfg.Server.MaxReceiveBuffer = maxMuxBufferSize + 1
+		if err := ValidateConfig(cfg); err == nil {
+			t.Fatal("oversized mux receive buffer was accepted")
+		}
+	})
+
 	t.Run("bracketed ipv6", func(t *testing.T) {
 		cfg := validServerConfig()
 		cfg.Server.BindAddr = "[::1]:3080"
@@ -117,5 +168,61 @@ func TestValidatePortMapping(t *testing.T) {
 		if err := validatePortMapping(mapping); err == nil {
 			t.Errorf("invalid mapping %q accepted", mapping)
 		}
+	}
+}
+
+
+func TestLoadConfigSecurityDefaultsAndUnknownKeys(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	secureClient := `[client]
+remote_addr = "server.example.com:443"
+transport = "wss"
+token = "a-long-random-test-token"
+`
+	if err := os.WriteFile(path, []byte(secureClient), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig with omitted tls_verify: %v", err)
+	}
+	if !cfg.Client.TLSVerify {
+		t.Fatal("omitted client.tls_verify did not default to true")
+	}
+
+	explicitOptOut := secureClient + "tls_verify = false\n"
+	if err := os.WriteFile(path, []byte(explicitOptOut), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig with explicit tls_verify=false: %v", err)
+	}
+	if cfg.Client.TLSVerify {
+		t.Fatal("explicit client.tls_verify=false was not preserved")
+	}
+
+	unknownKey := secureClient + "tls_verfy = false\n"
+	if err := os.WriteFile(path, []byte(unknownKey), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadConfig(path); err == nil || !strings.Contains(err.Error(), "unknown configuration key") {
+		t.Fatalf("unknown/misspelled key was not rejected, error = %v", err)
+	}
+}
+
+func TestValidateServerTLSFilesPreflight(t *testing.T) {
+	cfg := &config.ServerConfig{
+		Transport:  config.WSS,
+		TLSCertFile: filepath.Join(t.TempDir(), "missing-cert.pem"),
+		TLSKeyFile:  filepath.Join(t.TempDir(), "missing-key.pem"),
+	}
+	if err := validateServerTLSFiles(cfg); err == nil {
+		t.Fatal("missing WSS certificate/key passed preflight")
+	}
+	cfg.Transport = config.TCP
+	if err := validateServerTLSFiles(cfg); err != nil {
+		t.Fatalf("non-TLS transport unexpectedly required certificate files: %v", err)
 	}
 }
