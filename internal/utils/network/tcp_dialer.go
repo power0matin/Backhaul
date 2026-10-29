@@ -63,7 +63,7 @@ func attemptTcpDialer(
 	// Options
 	dialer := &net.Dialer{
 		Control: func(network, address string, s syscall.RawConn) error {
-			err := ReusePortControl(network, address, s)
+			err := SocketControl(network, address, s)
 			if err != nil {
 				return err
 			}
