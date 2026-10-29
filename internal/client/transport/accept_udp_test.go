@@ -60,6 +60,7 @@ func TestUDPToTCPForwardsLargeDatagramWithoutTruncation(t *testing.T) {
 		}
 	}
 	_ = right.Close()
+	_ = udp.Close() // Unblock the receiver's next UDP read after verifying the frame.
 	select {
 	case <-done:
 	case <-time.After(time.Second):
