@@ -109,6 +109,10 @@ reproduction methodology, stress/soak results, and baseline comparison.
    ./backhaul
    ```
 
+## TCP half-close behavior
+
+The plain `tcp` transport preserves TCP half-close: a client may finish sending a request while still receiving the response. Multiplexed transports using the currently pinned smux API do not expose a write-side-only close; an EOF there closes that stream rather than preserving a half-open stream. Do not rely on request/response-after-half-close behavior with TCPMUX/WSMUX/WSSMUX until the mux implementation supports it.
+
 ## Usage
 
 The main executable for this project is `backhaul`. It requires a TOML configuration file for both the server and client components.

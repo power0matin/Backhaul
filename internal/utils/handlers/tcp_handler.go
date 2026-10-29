@@ -39,50 +39,76 @@ func TCPConnectionHandler(ctx context.Context, proxyProtocol bool, from net.Conn
 
 	done := make(chan struct{}, 1)
 	go func() {
-		transferData(from, to, logger, usage, remotePort, sniffer)
-		closeBoth()
+		if transferData(from, to, logger, usage, remotePort, sniffer) {
+			halfCloseWrite(to, logger)
+		} else {
+			closeBoth()
+		}
 		done <- struct{}{}
 	}()
-	transferData(to, from, logger, usage, remotePort, sniffer)
-	closeBoth()
+	if transferData(to, from, logger, usage, remotePort, sniffer) {
+		halfCloseWrite(from, logger)
+	} else {
+		closeBoth()
+	}
 	<-done
+	closeBoth()
 }
 
-// Using direct Read and Write for transferring data
-func transferData(from net.Conn, to net.Conn, logger *logrus.Logger, usage *web.Usage, remotePort int, sniffer bool) {
+// halfCloseWrite propagates EOF without dropping the reverse direction when the
+// connection type supports TCP half-close. Multiplexed streams at the pinned
+// smux version do not expose CloseWrite; those are closed fully as a fallback.
+func halfCloseWrite(conn net.Conn, logger *logrus.Logger) {
+	if closeWriter, ok := conn.(interface{ CloseWrite() error }); ok {
+		if err := closeWriter.CloseWrite(); err != nil {
+			logger.Trace("unable to half-close write side: ", err)
+			_ = conn.Close()
+		}
+		return
+	}
+	_ = conn.Close()
+}
+
+// Using direct Read and Write for transferring data. The return value is true
+// only for a clean EOF; other read/write failures must close both endpoints.
+func transferData(from net.Conn, to net.Conn, logger *logrus.Logger, usage *web.Usage, remotePort int, sniffer bool) bool {
 	buf := make([]byte, 16*1024) // 16K
 	for {
-		// Read data from the source connection
 		r, err := from.Read(buf)
 		if err != nil {
-			if errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) {
-				logger.Trace("reader stream closed or EOF received")
+			if errors.Is(err, io.EOF) {
+				logger.Trace("reader stream reached EOF")
+				return true
+			}
+			if errors.Is(err, net.ErrClosed) {
+				logger.Trace("reader stream closed")
 			} else {
 				logger.Trace("unable to read from the connection: ", err)
 			}
-			return
+			return false
 		}
 
 		totalWritten := 0
 		for totalWritten < r {
-			// Write data to the destination connection
 			w, err := to.Write(buf[totalWritten:r])
 			if err != nil {
 				if errors.Is(err, net.ErrClosed) {
-					logger.Trace("writer stream closed or EOF received")
+					logger.Trace("writer stream closed")
 				} else {
 					logger.Trace("unable to write to the connection: ", err)
 				}
-				return
-
+				return false
+			}
+			if w == 0 {
+				logger.Trace("writer returned zero bytes without an error")
+				return false
 			}
 			totalWritten += w
 		}
 
 		logger.Tracef("read data: %d bytes, written data: %d bytes", r, totalWritten)
-		if sniffer {
+		if sniffer && usage != nil {
 			usage.AddOrUpdatePort(remotePort, uint64(totalWritten))
 		}
 	}
-
 }
