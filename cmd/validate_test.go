@@ -178,6 +178,39 @@ func TestValidateServerTransportOptions(t *testing.T) {
 	}
 }
 
+func TestValidateEndpointHostnameAndWhitespace(t *testing.T) {
+	tests := []struct {
+		name    string
+		field   string
+		value   string
+		wantErr bool
+	}{
+		{name: "valid DNS endpoint", field: "client.remote_addr", value: "server-node.example.com:443"},
+		{name: "valid wildcard bind", field: "server.bind_addr", value: ":3080"},
+		{name: "empty remote host", field: "client.remote_addr", value: ":443", wantErr: true},
+		{name: "invalid hostname whitespace", field: "client.remote_addr", value: "bad host:443", wantErr: true},
+		{name: "surrounding whitespace", field: "client.remote_addr", value: " server.example.com:443 ", wantErr: true},
+		{name: "empty hostname label", field: "client.remote_addr", value: "bad..example:443", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateEndpoint(tt.field, tt.value)
+			if tt.wantErr && err == nil {
+				t.Fatal("invalid endpoint was accepted")
+			}
+			if !tt.wantErr && err != nil {
+				t.Fatalf("valid endpoint rejected: %v", err)
+			}
+		})
+	}
+}
+
+func TestValidateLocalMappingHyphenatedHostname(t *testing.T) {
+	if err := validateLocalMappingAddress("my-local-host.example.com:443"); err != nil {
+		t.Fatalf("hyphenated local hostname was interpreted as a port range: %v", err)
+	}
+}
+
 func TestValidatePortMapping(t *testing.T) {
 	valid := []string{
 		"443-600",
@@ -255,6 +288,27 @@ token = "a-long-random-test-token"
 	}
 	if _, err := LoadConfig(path); err == nil || !strings.Contains(err.Error(), "unknown configuration key") {
 		t.Fatalf("unknown/misspelled key was not rejected, error = %v", err)
+	}
+}
+
+func TestLoadConfigDefaultsSnifferLogBesideConfig(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "client.toml")
+	configText := `[client]
+remote_addr = "server.example.com:443"
+transport = "tcp"
+token = "a-long-random-test-token"
+`
+	if err := os.WriteFile(path, []byte(configText), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	want := filepath.Join(dir, defaultSnifferLog)
+	if cfg.Client.SnifferLog != want {
+		t.Fatalf("default sniffer_log = %q, want %q", cfg.Client.SnifferLog, want)
 	}
 }
 
