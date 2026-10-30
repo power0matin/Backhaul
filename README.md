@@ -20,6 +20,8 @@ Welcome to the **`Backhaul`** project! This project provides a high-performance 
 
 1. [Introduction](#introduction)
 2. [v0.8.0 production hardening](#v080-production-hardening)
+3. [v0.8.1 TCP data-channel authentication](#v081-tcp-data-channel-authentication)
+4. [Changelog](CHANGELOG.md)
 3. [Features](#features)
 4. [Installation](#installation)
 5. [Usage](#usage)
