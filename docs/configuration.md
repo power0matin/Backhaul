@@ -25,7 +25,7 @@ Both endpoints must use the same `transport` and the same strong, unique `token`
 | `wsmux` | Multiplexed WebSocket | Uses SMUX |
 | `wssmux` | Multiplexed WebSocket over TLS | Requires a server certificate and private key |
 
-The server and client transport values must match. Multiplexing settings apply to `tcpmux`, `wsmux`, and `wssmux`.
+The server and client transport values must match. SMUX version and buffer settings apply to `tcpmux`, `wsmux`, and `wssmux`. `mux_con` controls the server-side stream concurrency for multiplexed transports. The legacy `mux_session` field is not used by the current transport implementations and is omitted from the reference.
 
 ## Server options
 
@@ -43,7 +43,6 @@ The server and client transport values must match. Multiplexing settings apply t
 | `channel_size` | `2048` | Bounded forwarding queue size |
 | `nodelay` | `false` | Enable TCP_NODELAY where supported |
 | `mux_con` | `8` | SMUX concurrency |
-| `mux_session` | `1` | SMUX session setting |
 | `mux_version` | `1` | SMUX version; `1` or `2` |
 | `mux_framesize` | `32768` | Maximum SMUX frame size in bytes |
 | `mux_recievebuffer` | `4194304` | SMUX receive buffer in bytes (key spelling is intentional) |
@@ -87,7 +86,6 @@ A port-only remote target resolves to `127.0.0.1:port` on the client. To forward
 | `aggressive_pool` | `false` | Enable aggressive pool management |
 | `edge_ip` | Empty | Optional edge IP for WebSocket-based transports |
 | `tls_verify` | `true` | Verify server TLS certificate for WSS/WSSMUX |
-| `mux_session` | `1` | SMUX session setting |
 | `mux_version` | `1` | SMUX version; `1` or `2` |
 | `mux_framesize` | `32768` | Maximum SMUX frame size in bytes |
 | `mux_recievebuffer` | `4194304` | SMUX receive buffer in bytes (key spelling is intentional) |
