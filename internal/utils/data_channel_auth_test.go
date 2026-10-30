@@ -85,12 +85,29 @@ func TestDataChannelAuthenticationRejectsUnauthenticatedSameIPPeer(t *testing.T)
 		t.Fatalf("test precondition failed: client IP %s != server-observed IP %s", clientIP, serverObservedIP)
 	}
 
+	clientProofDone := make(chan error, 1)
+	go func() {
+		if err := writeAll(clientConn, []byte{SG_DataAuth}); err != nil {
+			clientProofDone <- err
+			return
+		}
+		challenge := make([]byte, dataChannelChallengeSize)
+		if _, err := io.ReadFull(clientConn, challenge); err != nil {
+			clientProofDone <- err
+			return
+		}
+		clientProofDone <- writeAll(clientConn, make([]byte, dataChannelChallengeSize))
+	}()
+
 	_, legacy, err := AuthenticateDataChannelServer(serverConn, "shared-secret", false)
 	if err == nil {
-		t.Fatal("server accepted a same-IP connection without a token proof")
+		t.Fatal("server accepted a same-IP connection without a valid token proof")
 	}
 	if legacy {
 		t.Fatal("strict mode unexpectedly classified the unauthenticated peer as legacy")
+	}
+	if clientErr := <-clientProofDone; clientErr != nil {
+		t.Fatalf("forged proof exchange failed before server rejection: %v", clientErr)
 	}
 }
 
