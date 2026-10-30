@@ -49,26 +49,6 @@ This project offers a robust reverse tunneling solution to overcome NAT and fire
 
 ## v0.8.0 production hardening
 
-## v0.8.1 TCP data-channel authentication
-
-TCP and TCPMUX pool connections now perform a one-time server challenge and
-prove possession of the configured tunnel token using HMAC-SHA256. The token is
-not sent on pooled data connections. The source-IP comparison remains as an
-additional restriction, not as the authentication mechanism.
-
-The server rejects unauthenticated pool connections by default. For a
-controlled rolling upgrade from an older client, set
-`allow_legacy_data_connections = true` on the TCP/TCPMUX server before
-upgrading clients. Upgrade the server first, then upgrade every paired client,
-and finally set the option back to `false`. Legacy connections are delayed
-briefly while the server distinguishes old clients from authenticated peers.
-Do not leave legacy mode enabled on an Internet-facing listener.
-
-New v0.8.1 clients require the new server-side data-channel handshake; upgrade
-the server before upgrading its client. Other transports retain their existing
-transport-level authentication behavior.
-
-
 This fork is based on upstream v0.7.2 commit
 `df7966f8f725837a680ea7b90bd37ea52666c277`. The v0.8.0 work keeps the
 existing transports and wire framing while focusing on failure behavior:
@@ -95,6 +75,25 @@ existing transports and wire framing while focusing on failure behavior:
 
 See [PERFORMANCE.md](./PERFORMANCE.md) for the issue-by-issue audit,
 reproduction methodology, stress/soak results, and baseline comparison.
+
+## v0.8.1 TCP data-channel authentication
+
+TCP and TCPMUX pool connections now perform a one-time server challenge and
+prove possession of the configured tunnel token using HMAC-SHA256. The token is
+not sent on pooled data connections. The source-IP comparison remains as an
+additional restriction, not as the authentication mechanism.
+
+The server rejects unauthenticated pool connections by default. For a
+controlled rolling upgrade from an older client, set
+`allow_legacy_data_connections = true` on the TCP/TCPMUX server before
+upgrading clients. Upgrade the server first, then upgrade every paired client,
+and finally set the option back to `false`. Legacy connections are delayed
+briefly while the server distinguishes old clients from authenticated peers.
+Do not leave legacy mode enabled on an Internet-facing listener.
+
+New v0.8.1 clients require the new server-side data-channel handshake; upgrade
+the server before upgrading its client. Other transports retain their existing
+transport-level authentication behavior.
 
 ## Features
 
