@@ -12,6 +12,8 @@ const (
 	// retirement capability. Keeping it at the end preserves every existing
 	// v0.7.2/v0.8.0 signal value.
 	SG_MuxRetire
+	// SG_DataAuth begins the per-connection TCP data-channel authentication handshake.
+	SG_DataAuth
 )
 
 const WSMUXRetireSubprotocol = "backhaul.mux-retire.v1"
