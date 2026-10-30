@@ -19,7 +19,7 @@ import (
 var logger = utils.NewLogger("info")
 
 const (
-	version               = "v0.8.0"
+	version               = "v0.8.1"
 	reloadPollInterval    = 2 * time.Second
 	reloadShutdownTimeout = 5 * time.Second
 )
