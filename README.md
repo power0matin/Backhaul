@@ -19,7 +19,7 @@ Welcome to the **`Backhaul`** project! This project provides a high-performance 
 ## Table of Contents
 
 1. [Introduction](#introduction)
-2. [Backhaul Manager (companion project)](#backhaul-manager-companion-project)
+2. [Backhaul Manager](#backhaul-manager)
 3. [v0.8.0 production hardening](#v080-production-hardening)
 4. [v0.8.1 TCP data-channel authentication](#v081-tcp-data-channel-authentication)
 5. [Changelog](CHANGELOG.md)
@@ -41,105 +41,86 @@ Welcome to the **`Backhaul`** project! This project provides a high-performance 
 12. [Benchmark](#benchmark)
 13. [License](#license)
 14. [Donation](#donation)
-
 ---
 
 ## Introduction
 
-This project offers a robust reverse tunneling solution to overcome NAT and firewall restrictions, supporting various transport protocols. It’s engineered for high efficiency and concurrency.
+Backhaul is a high-performance reverse-tunneling tool for bypassing NAT and firewall restrictions, with support for multiple transports and concurrent connections.
 
-## Backhaul Manager (companion project)
+## Backhaul Manager
 
-For a guided setup and easier day-to-day operations, you can use **[Backhaul Manager](https://github.com/power0matin/backhaul-manager)**, an interactive Bash-based installer and operations manager maintained alongside this Backhaul fork.
+[**Backhaul Manager**](https://github.com/power0matin/backhaul-manager) is the companion installer and operations tool for configuring both tunnel endpoints.
 
-It helps configure both sides of a tunnel (Iran-side server and foreign-side client) and provides seven transport options (`tcp`, `tcpmux`, `udp`, `ws`, `wss`, `wsmux`, and `wssmux`). Other features include standard and advanced setup modes, named profiles, pre-tunnel link tests, validated backups, host migration, health checks, diagnostics, logs and CLI maintenance.
+| Capability | Details |
+|---|---|
+| Setup | Guided Iran-server and foreign-client configuration; standard and advanced modes |
+| Transports | `tcp`, `tcpmux`, `udp`, `ws`, `wss`, `wsmux`, `wssmux` |
+| Management | Profiles, link tests, backups, migration, health checks, diagnostics, logs and CLI |
 
-Backhaul Manager supports **`power0matin/Backhaul`** as its recommended binary source, as well as **`Musixal/Backhaul`** upstream. It is an optional companion project: Backhaul can still be installed and configured directly using the instructions below.
-
-See the [Backhaul Manager README](https://github.com/power0matin/backhaul-manager#readme) for installation instructions, requirements and operational details. The manager needs root privileges for installation and service-management operations; review its script before running it.
+It uses **`power0matin/Backhaul`** as its recommended binary source and also supports upstream `Musixal/Backhaul`. See the [manager documentation](https://github.com/power0matin/backhaul-manager#readme). Root access is required for installation and service management; review the script before running it.
 
 ## v0.8.0 production hardening
 
-This fork is based on upstream v0.7.2 commit
-`df7966f8f725837a680ea7b90bd37ea52666c277`. The v0.8.0 work keeps the
-existing transports and wire framing while focusing on failure behavior:
+Based on upstream v0.7.2 (`df7966f8f725837a680ea7b90bd37ea52666c277`), this release hardened resource limits, recovery and monitoring without changing transport framing.
 
-* UDP and `accept_udp` flow queues are bounded per flow and across the
-  transport. New defaults are `udp_queue_size = 64`,
-  `udp_queue_limit = 4096`, and `udp_max_flows = 2048`.
-* A full local TCP queue now applies up to 250 ms of bounded backpressure
-  before rejecting the connection. Rejections are counted and warning logs
-  are rate limited.
-* Transport reconnects use fresh lifecycle generations instead of reusing
-  canceled contexts/channels, and retry waits are cancellation-aware with
-  bounded jittered backoff.
-* Adaptive client pool growth is bounded by `max_pool_size`. If omitted, the
-  default is the larger of `connection_pool * 4` and
-  `connection_pool + 16`.
-* Configuration is validated before startup and before hot-reload replaces a
-  healthy generation. An invalid edited file is logged and the running
-  generation is kept.
-* The web monitor binds to `127.0.0.1` by default and can use HTTP Basic
-  authentication. pprof, when enabled, is loopback-only.
-* `/stats` includes active connections, pool utilization, reconnects,
-  rejected/dropped work, uptime, goroutine count, and Go live heap.
+| Area | Improvement |
+|---|---|
+| UDP | Bounded queues and flow limits: `64` packets/flow, `4096` queued packets total, `2048` flows by default |
+| TCP | Up to 250 ms bounded backpressure before rejecting a full local queue |
+| Reconnects | Fresh lifecycle generations and cancellation-aware retries with bounded jitter |
+| Client pool | Adaptive growth capped by `max_pool_size` |
+| Configuration | Validation before startup and hot reload; invalid edits keep the healthy running generation |
+| Monitoring | Loopback-only web monitor by default; optional HTTP Basic auth; loopback-only pprof |
+| Statistics | `/stats` reports connections, pool use, reconnects, drops/rejections, uptime, goroutines and live heap |
 
-See [PERFORMANCE.md](./PERFORMANCE.md) for the issue-by-issue audit,
-reproduction methodology, stress/soak results, and baseline comparison.
+See [PERFORMANCE.md](./PERFORMANCE.md) for benchmarks, stress/soak results and the detailed audit.
 
 ## v0.8.1 TCP data-channel authentication
 
-TCP and TCPMUX pool connections now perform a one-time server challenge and
-prove possession of the configured tunnel token using HMAC-SHA256. The token is
-not sent on pooled data connections. The source-IP comparison remains as an
-additional restriction, not as the authentication mechanism.
+TCP/TCPMUX pooled connections now authenticate each data channel with a server challenge and HMAC-SHA256 proof. The tunnel token is never sent on pooled data connections; source-IP matching remains an additional restriction.
 
-The server rejects unauthenticated pool connections by default. For a
-controlled rolling upgrade from an older client, set
-`allow_legacy_data_connections = true` on the TCP/TCPMUX server before
-upgrading clients. Upgrade the server first, then upgrade every paired client,
-and finally set the option back to `false`. Legacy connections are delayed
-briefly while the server distinguishes old clients from authenticated peers.
-Do not leave legacy mode enabled on an Internet-facing listener.
+| Item | Behavior |
+|---|---|
+| Default | Unauthenticated pool connections are rejected; legacy mode is disabled |
+| Upgrade order | Upgrade the server first, then every paired client |
+| Older clients | Temporarily set `allow_legacy_data_connections = true` on the TCP/TCPMUX server during the rolling upgrade, then set it back to `false` |
+| Other transports | Keep their existing transport-level authentication behavior |
 
-New v0.8.1 clients require the new server-side data-channel handshake; upgrade
-the server before upgrading its client. Other transports retain their existing
-transport-level authentication behavior.
+**Do not leave legacy mode enabled on an Internet-facing listener.** New v0.8.1 clients require the new server-side handshake.
 
 ## Features
 
-* **High Performance**: Optimized for handling massive concurrent connections efficiently.
-* **Protocol Flexibility**: Supports TCP, WebSocket (WS), and Secure WebSocket (WSS) transports.
-* **UDP over TCP**: Implements UDP traffic encapsulation and forwarding over a TCP connection for reliable delivery with built-in congestion control.
-* **Multiplexing**: Enables multiple connections over a single transport with SMUX.
-* **NAT & Firewall Bypass**: Overcomes restrictions with reverse tunneling.
-* **Traffic Sniffing**: Optional network traffic monitoring with logging support.
-* **Configurable Keepalive**: Adjustable keep-alive and heartbeat intervals for stable connections.
-* **TLS Encryption**: Secure connections via WSS with support for custom TLS certificates.
-* **Web Interface**: Real-time monitoring through a lightweight web interface.
-* **Hot Reload Configuration**: Supports dynamic configuration reloading without server restarts.
+| Feature | Description |
+|---|---|
+| Performance | Designed for high concurrency and efficient resource use |
+| Transports | TCP, UDP, WS and WSS, including multiplexed variants |
+| UDP forwarding | UDP encapsulation over TCP with congestion control |
+| Multiplexing | Multiple sessions over a single transport using SMUX |
+| Security | Token authentication and TLS support for WSS |
+| Operations | Traffic sniffing, configurable keepalive, web monitoring and hot reload |
 
 ## Installation
 
-1. **Download** the latest release from the [fork releases page](https://github.com/power0matin/Backhaul/releases).
-2. **Extract** the archive (adjust the `filename` if needed):  
+### Easy tunnel setup
 
-   ```bash
-   tar -xzf backhaul_linux_amd64.tar.gz
-   ``` 
-3. **Run** the executable:  
+For guided installation and configuration on both tunnel endpoints, use [**Backhaul Manager**](https://github.com/power0matin/backhaul-manager?utm_source=chatgpt.com). It supports this fork as its recommended binary source and simplifies tunnel setup and management.
 
-   ```bash
-   ./backhaul
-   ```
-4. You can also build from source if preferred:  
+### Manual installation
 
-   ```bash
-   git clone https://github.com/power0matin/Backhaul.git
-   cd Backhaul
-   go build
-   ./backhaul
-   ```
+| Step | Command |
+|---|---|
+| Download | Get the matching Linux archive from the [latest release](https://github.com/power0matin/Backhaul/releases) |
+| Extract | `tar -xzf backhaul_linux_amd64.tar.gz` |
+| Run | `./backhaul -c config.toml` |
+
+To build from source:
+
+```bash
+git clone https://github.com/power0matin/Backhaul.git
+cd Backhaul
+go build
+./backhaul -c config.toml
+```
 
 ## TCP half-close behavior
 
