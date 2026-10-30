@@ -329,83 +329,104 @@ func (s *TcpMuxTransport) tunnelListener() {
 }
 
 func (s *TcpMuxTransport) acceptTunnelConn(listener net.Listener) {
+	dataWorkers := make(chan struct{}, maxConcurrentControlHandshakes)
 	for {
 		select {
 		case <-s.ctx.Done():
 			return
 		default:
-			s.logger.Debugf("waiting for accept incoming tunnel connection on %s", listener.Addr().String())
 			conn, err := listener.Accept()
 			if err != nil {
-				s.logger.Debugf("failed to accept tunnel connection on %s: %v", listener.Addr().String(), err)
+				if s.ctx.Err() != nil {
+					return
+				}
+				s.logger.Debugf("failed to accept tunnel connection on %s: %v", listener.Addr(), err)
 				continue
 			}
 
-			//discard any non tcp connection
 			tcpConn, ok := conn.(*net.TCPConn)
 			if !ok {
-				s.logger.Warnf("disarded non-TCP tunnel connection from %s", conn.RemoteAddr().String())
-				conn.Close()
+				s.logger.Warnf("discarded non-TCP tunnel connection from %s", conn.RemoteAddr())
+				_ = conn.Close()
 				continue
 			}
 
-			// Drop all suspicious packets from other address rather than server
 			control := s.getControlChannel()
-			if control != nil && control.RemoteAddr().(*net.TCPAddr).IP.String() != tcpConn.RemoteAddr().(*net.TCPAddr).IP.String() {
-				s.logger.Debugf("suspicious packet from %v. expected address: %v. discarding packet...", tcpConn.RemoteAddr().(*net.TCPAddr).IP.String(), control.RemoteAddr().(*net.TCPAddr).IP.String())
-				tcpConn.Close()
-				continue
-			}
-
-			// trying to set tcpnodelay
-			if !s.config.Nodelay {
-				if err := tcpConn.SetNoDelay(s.config.Nodelay); err != nil {
-					s.logger.Warnf("failed to set TCP_NODELAY for %s: %v", tcpConn.RemoteAddr().String(), err)
-				} else {
-					s.logger.Tracef("TCP_NODELAY disabled for %s", tcpConn.RemoteAddr().String())
-				}
-			}
-
-			// Set keep-alive settings
-			if err := tcpConn.SetKeepAlive(true); err != nil {
-				s.logger.Warnf("failed to enable TCP keep-alive for %s: %v", tcpConn.RemoteAddr().String(), err)
-			} else {
-				s.logger.Tracef("TCP keep-alive enabled for %s", tcpConn.RemoteAddr().String())
-			}
-			if err := tcpConn.SetKeepAlivePeriod(s.config.KeepAlive); err != nil {
-				s.logger.Warnf("failed to set TCP keep-alive period for %s: %v", tcpConn.RemoteAddr().String(), err)
-			}
-
-			// try to establish a new channel
-			if s.getControlChannel() == nil {
+			if control == nil {
 				s.logger.Info("control channel not found, attempting to establish a new session")
 				select {
-				case s.handshakeChannel <- conn: // ok
+				case s.handshakeChannel <- conn:
+				case <-s.ctx.Done():
+					_ = conn.Close()
+					return
 				default:
-					s.logger.Warnf("control channel handshake in progress...")
-					conn.Close()
+					s.logger.Warn("control channel handshake in progress; rejecting extra candidate")
+					_ = conn.Close()
 				}
 				continue
 			}
 
-			session, err := smux.Client(conn, s.smuxConfig)
-			if err != nil {
-				s.logger.Errorf("failed to create MUX session for connection %s: %v", conn.RemoteAddr().String(), err)
-				conn.Close()
+			controlPeer, controlOK := control.RemoteAddr().(*net.TCPAddr)
+			tunnelPeer, tunnelOK := tcpConn.RemoteAddr().(*net.TCPAddr)
+			if !controlOK || !tunnelOK || !controlPeer.IP.Equal(tunnelPeer.IP) {
+				s.logger.Debugf("discarding TCPMUX connection from unexpected peer %s", tcpConn.RemoteAddr())
+				_ = tcpConn.Close()
 				continue
+			}
+
+			if err := tcpConn.SetNoDelay(s.config.Nodelay); err != nil {
+				s.logger.Warnf("failed to set TCP_NODELAY for %s: %v", tcpConn.RemoteAddr(), err)
+			}
+			if err := tcpConn.SetKeepAlive(true); err != nil {
+				s.logger.Warnf("failed to enable TCP keep-alive for %s: %v", tcpConn.RemoteAddr(), err)
+			}
+			if err := tcpConn.SetKeepAlivePeriod(s.config.KeepAlive); err != nil {
+				s.logger.Warnf("failed to set TCP keep-alive period for %s: %v", tcpConn.RemoteAddr(), err)
 			}
 
 			select {
-			case s.tunnelChannel <- session: // ok
+			case dataWorkers <- struct{}{}:
+				go func(conn net.Conn, expectedControl net.Conn) {
+					defer func() { <-dataWorkers }()
+					legacy, authErr := utils.AuthenticateDataChannelServer(conn, s.config.Token, s.config.AllowLegacyDataConnections)
+					if authErr != nil {
+						s.logger.Debugf("rejected unauthenticated TCPMUX data channel from %s: %v", conn.RemoteAddr(), authErr)
+						_ = conn.Close()
+						return
+					}
+					if s.ctx.Err() != nil || s.getControlChannel() != expectedControl {
+						_ = conn.Close()
+						return
+					}
+					if legacy {
+						s.logger.Warnf("accepting legacy unauthenticated TCPMUX data channel from %s; disable allow_legacy_data_connections after upgrading all clients", conn.RemoteAddr())
+					}
+
+					session, err := smux.Client(conn, s.smuxConfig)
+					if err != nil {
+						s.logger.Debugf("failed to create authenticated MUX session for %s: %v", conn.RemoteAddr(), err)
+						_ = conn.Close()
+						return
+					}
+					select {
+					case s.tunnelChannel <- session:
+					case <-s.ctx.Done():
+						_ = session.Close()
+					default:
+						if total, logNow := s.usageMonitor.RecordRejected(); logNow {
+							s.logger.Warnf("mux tunnel channel full; rejecting authenticated connection from %s (total rejected/dropped=%d)", conn.RemoteAddr(), total)
+						}
+						_ = session.Close()
+					}
+				}(conn, control)
 			default:
 				if total, logNow := s.usageMonitor.RecordRejected(); logNow {
-					s.logger.Warnf("mux tunnel channel full; rejecting connection from %s (total rejected/dropped=%d)", conn.RemoteAddr(), total)
+					s.logger.Warnf("data-channel authentication capacity full; rejecting %s (total rejected/dropped=%d)", conn.RemoteAddr(), total)
 				}
-				session.Close()
+				_ = conn.Close()
 			}
 		}
 	}
-
 }
 
 func (s *TcpMuxTransport) getControlChannel() net.Conn {
