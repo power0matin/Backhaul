@@ -19,7 +19,7 @@ Welcome to the **`Backhaul`** project! This project provides a high-performance 
 ## Table of Contents
 
 1. [Introduction](#introduction)
-2. [BackhaulManager (third-party tool)](#backhaulmanager-third-party-tool)
+2. [Backhaul Manager (companion project)](#backhaul-manager-companion-project)
 3. [v0.8.0 production hardening](#v080-production-hardening)
 4. [v0.8.1 TCP data-channel authentication](#v081-tcp-data-channel-authentication)
 5. [Changelog](CHANGELOG.md)
@@ -48,13 +48,15 @@ Welcome to the **`Backhaul`** project! This project provides a high-performance 
 
 This project offers a robust reverse tunneling solution to overcome NAT and firewall restrictions, supporting various transport protocols. It’s engineered for high efficiency and concurrency.
 
-## BackhaulManager (third-party tool)
+## Backhaul Manager (companion project)
 
-For users who prefer an interactive terminal workflow, **[BackhaulManager](https://github.com/B3hnamR/BackhaulManager)** is a community-maintained tool for creating and managing Backhaul tunnels on Linux. Its documented features include guided Iran/server and Kharej/client setup, systemd service management, tunnel monitoring, a health watchdog, metrics history, safe restart, and optional Telegram alerts. It currently documents support for `tcp`, `tcpmux`, `wsmux`, and `wssmux`.
+For a guided setup and easier day-to-day operations, you can use **[Backhaul Manager](https://github.com/power0matin/backhaul-manager)**, an interactive Bash-based installer and operations manager maintained alongside this Backhaul fork.
 
-> **Important — binary source:** BackhaulManager’s built-in **GitHub** installation option downloads releases from `Musixal/Backhaul`, not this fork. To use `power0matin/Backhaul`, download the matching archive from this repository’s [releases](https://github.com/power0matin/Backhaul/releases) and choose **Local file** in BackhaulManager, or provide this fork’s release asset through **Mirror URL**. Do not use the default upstream download option expecting it to install this fork.
+It helps configure both sides of a tunnel (Iran-side server and foreign-side client) and provides seven transport options (`tcp`, `tcpmux`, `udp`, `ws`, `wss`, `wsmux`, and `wssmux`). Other features include standard and advanced setup modes, named profiles, pre-tunnel link tests, validated backups, host migration, health checks, diagnostics, logs and CLI maintenance.
 
-BackhaulManager is an independent third-party project and is not maintained or officially supported by this repository. Review its installation script and permissions before running it with root privileges.
+Backhaul Manager supports **`power0matin/Backhaul`** as its recommended binary source, as well as **`Musixal/Backhaul`** upstream. It is an optional companion project: Backhaul can still be installed and configured directly using the instructions below.
+
+See the [Backhaul Manager README](https://github.com/power0matin/backhaul-manager#readme) for installation instructions, requirements and operational details. The manager needs root privileges for installation and service-management operations; review its script before running it.
 
 ## v0.8.0 production hardening
 
