@@ -161,10 +161,7 @@ requirements.
 * pprof uses an explicit loopback-only server with shutdown tied to the
   transport context.
 * Configuration loading warns when the TOML file is group/other readable.
-* WSS/WSSMUX add `tls_verify`. It intentionally defaults to `false` to
-  preserve v0.7.2 self-signed deployments; setting it to `true` enables
-  normal CA/hostname verification. This compatibility default remains a known
-  security limitation.
+* v0.8.0 WSS/WSSMUX `tls_verify` defaulted to `false` for v0.7.2 compatibility. v0.8.1 changes the omitted default to `true`; setting it explicitly to `false` remains a compatibility opt-out.
 * Web/WS HTTP servers use header/time limits to reduce slow/malformed-input
   resource exposure.
 
@@ -341,8 +338,7 @@ Intentional operational differences:
    failing later in worker goroutines.
 3. Adaptive pool growth now has a finite ceiling. Existing configs that omit
    `max_pool_size` receive a derived ceiling while retaining adaptive growth.
-4. WSS certificate verification remains disabled by default for v0.7.2
-   compatibility. Set `tls_verify = true` for trusted certificates.
+4. In v0.8.0, WSS certificate verification was disabled by default for v0.7.2 compatibility. In v0.8.1, omission defaults to verification enabled; set `tls_verify = false` only as an explicit exception for an untrusted certificate.
 
 ## Known limits of the evidence
 
@@ -378,3 +374,27 @@ GOMAXPROCS=4 go test ./benchmark -run '^$' -bench . -benchmem -count 5
 For baseline comparison, run the same benchmark test source at
 `df7966f8f725837a680ea7b90bd37ea52666c277`. Do not compare the fork against
 a different upstream revision or a different benchmark payload.
+
+
+## v0.8.1 security changes
+
+The v0.8.1 release adds a fresh server-generated challenge for each pooled
+TCP/TCPMUX data connection and validates a token-derived HMAC-SHA256 proof.
+The configured tunnel token is not transmitted on pooled data connections.
+Source-IP matching remains an additional policy, not the authentication
+mechanism. The default policy rejects data channels that do not complete this
+proof.
+
+For a controlled rolling upgrade only, TCP/TCPMUX servers can temporarily set
+`allow_legacy_data_connections = true`. The server preserves the initial
+legacy TCPMUX SMUX bytes while recognizing an old client. This mode is
+explicitly disabled by default and must be disabled again after every paired
+client has been upgraded. New clients require the new server-side handshake.
+
+This release also changes the default for omitted WSS/WSSMUX
+`tls_verify` to `true`. An explicit `false` remains available only as a
+compatibility exception for self-signed or otherwise untrusted certificates.
+
+These are security and protocol-correctness changes; no general throughput
+improvement is claimed by v0.8.1. The v0.8.0 benchmark tables above remain
+historical v0.8.0 measurements and have not been presented as v0.8.1 results.
