@@ -67,9 +67,9 @@ Each `ports` entry uses `local[=remote]`:
 | `"443"` | Listen on server port 443 and forward to client port 443 |
 | `"443=8443"` | Listen on server port 443 and forward to client port 8443 |
 | `"4000-4005"` | Listen on server ports 4000–4005 and forward each to the same port on the client |
-| `"127.0.0.1:8443=443"` | Bind server port 8443 only on 127.0.0.1 and forward to client port 443 |
+| `"127.0.0.1:8443=443"` | Bind server port 8443 only on 127.0.0.1 and forward to client `127.0.0.1:443` |
 
-A remote target may also be written as `host:port`. Local listener ports must not overlap the control listener or the enabled web monitor port.
+A port-only remote target resolves to `127.0.0.1:port` on the client. To forward to another client-side host, provide an explicit `host:port` target, for example `"443=10.0.0.5:443"`. Local listener ports must not overlap the control listener or the enabled web monitor port.
 
 ## Client options
 
@@ -139,8 +139,10 @@ Configuration is checked before startup and before a changed file replaces a hea
 
 | Setting | Accepted range |
 |---|---|
-| Ports | 1–65535 |
-| Time intervals | 1–86400 seconds |
+| Listener and destination ports | 1–65535; `web_port` also accepts `0` (disabled) |
+| `channel_size` | 1–1,000,000 |
+| `mux_con` | 1–4,096 |
+| Time intervals | 1–86,400 seconds |
 | `connection_pool` / `max_pool_size` | 1–100000; max pool must be at least the initial pool |
 | `mux_version` | 1 or 2 |
 | `mux_framesize` | 1–65535 bytes |
