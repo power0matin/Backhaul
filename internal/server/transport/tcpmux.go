@@ -388,7 +388,7 @@ func (s *TcpMuxTransport) acceptTunnelConn(listener net.Listener) {
 			case dataWorkers <- struct{}{}:
 				go func(conn net.Conn, expectedControl net.Conn) {
 					defer func() { <-dataWorkers }()
-					legacy, authErr := utils.AuthenticateDataChannelServer(conn, s.config.Token, s.config.AllowLegacyDataConnections)
+					authenticatedConn, legacy, authErr := utils.AuthenticateDataChannelServer(conn, s.config.Token, s.config.AllowLegacyDataConnections)
 					if authErr != nil {
 						s.logger.Debugf("rejected unauthenticated TCPMUX data channel from %s: %v", conn.RemoteAddr(), authErr)
 						_ = conn.Close()
@@ -402,7 +402,7 @@ func (s *TcpMuxTransport) acceptTunnelConn(listener net.Listener) {
 						s.logger.Warnf("accepting legacy unauthenticated TCPMUX data channel from %s; disable allow_legacy_data_connections after upgrading all clients", conn.RemoteAddr())
 					}
 
-					session, err := smux.Client(conn, s.smuxConfig)
+					session, err := smux.Client(authenticatedConn, s.smuxConfig)
 					if err != nil {
 						s.logger.Debugf("failed to create authenticated MUX session for %s: %v", conn.RemoteAddr(), err)
 						_ = conn.Close()
