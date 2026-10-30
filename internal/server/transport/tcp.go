@@ -52,6 +52,7 @@ type TcpConfig struct {
 	ChannelSize   int
 	WebPort       int
 	AcceptUDP     bool
+	AllowLegacyDataConnections bool
 	MSS           int
 	SO_RCVBUF     int
 	SO_SNDBUF     int
