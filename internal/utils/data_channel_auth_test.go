@@ -2,6 +2,8 @@ package utils
 
 import (
 	"net"
+	"bytes"
+	"io"
 	"testing"
 	"time"
 )
@@ -13,7 +15,7 @@ func TestDataChannelAuthenticationRoundTrip(t *testing.T) {
 
 	serverResult := make(chan error, 1)
 	go func() {
-		legacy, err := AuthenticateDataChannelServer(serverConn, "correct-horse-battery-staple", false)
+		_, legacy, err := AuthenticateDataChannelServer(serverConn, "correct-horse-battery-staple", false)
 		if legacy && err == nil {
 			serverResult <- err
 			return
@@ -41,7 +43,7 @@ func TestDataChannelAuthenticationRejectsWrongToken(t *testing.T) {
 
 	serverResult := make(chan error, 1)
 	go func() {
-		_, err := AuthenticateDataChannelServer(serverConn, "server-secret", false)
+		_, _, err := AuthenticateDataChannelServer(serverConn, "server-secret", false)
 		serverResult <- err
 	}()
 
@@ -83,7 +85,7 @@ func TestDataChannelAuthenticationRejectsUnauthenticatedSameIPPeer(t *testing.T)
 		t.Fatalf("test precondition failed: client IP %s != server-observed IP %s", clientIP, serverObservedIP)
 	}
 
-	legacy, err := AuthenticateDataChannelServer(serverConn, "shared-secret", false)
+	_, legacy, err := AuthenticateDataChannelServer(serverConn, "shared-secret", false)
 	if err == nil {
 		t.Fatal("server accepted a same-IP connection without a token proof")
 	}
@@ -92,12 +94,43 @@ func TestDataChannelAuthenticationRejectsUnauthenticatedSameIPPeer(t *testing.T)
 	}
 }
 
+func TestDataChannelLegacyTCPMuxPreambleIsPreserved(t *testing.T) {
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+
+	preamble := []byte{1, 0, 0, 0x10, 0x00}
+	writeDone := make(chan error, 1)
+	go func() {
+		_, err := clientConn.Write(preamble)
+		writeDone <- err
+	}()
+
+	authenticatedConn, legacy, err := AuthenticateDataChannelServer(serverConn, "shared-secret", true)
+	if err != nil {
+		t.Fatalf("legacy TCPMUX preamble was rejected: %v", err)
+	}
+	if !legacy {
+		t.Fatal("old TCPMUX connection was not classified as legacy")
+	}
+	got := make([]byte, len(preamble))
+	if _, err := io.ReadFull(authenticatedConn, got); err != nil {
+		t.Fatalf("could not read preserved legacy preamble: %v", err)
+	}
+	if !bytes.Equal(got, preamble) {
+		t.Fatalf("legacy preamble changed: got %v want %v", got, preamble)
+	}
+	if err := <-writeDone; err != nil {
+		t.Fatalf("legacy preamble write failed: %v", err)
+	}
+}
+
 func TestDataChannelLegacyModeRequiresExplicitOptIn(t *testing.T) {
 	serverConn, clientConn := net.Pipe()
 	defer serverConn.Close()
 	defer clientConn.Close()
 
-	legacy, err := AuthenticateDataChannelServer(serverConn, "shared-secret", true)
+	_, legacy, err := AuthenticateDataChannelServer(serverConn, "shared-secret", true)
 	if err != nil {
 		t.Fatalf("explicit legacy mode rejected a silent old client: %v", err)
 	}
