@@ -1,9 +1,9 @@
 package utils
 
 import (
-	"net"
 	"bytes"
 	"io"
+	"net"
 	"testing"
 	"time"
 )
