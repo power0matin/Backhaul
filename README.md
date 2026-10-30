@@ -19,8 +19,9 @@ Welcome to the **`Backhaul`** project! This project provides a high-performance 
 ## Table of Contents
 
 1. [Introduction](#introduction)
-2. [v0.8.0 production hardening](#v080-production-hardening)
-3. [v0.8.1 TCP data-channel authentication](#v081-tcp-data-channel-authentication)
+2. [BackhaulManager (third-party tool)](#backhaulmanager-third-party-tool)
+3. [v0.8.0 production hardening](#v080-production-hardening)
+4. [v0.8.1 TCP data-channel authentication](#v081-tcp-data-channel-authentication)
 4. [Changelog](CHANGELOG.md)
 5. [Features](#features)
 6. [Installation](#installation)
@@ -46,6 +47,14 @@ Welcome to the **`Backhaul`** project! This project provides a high-performance 
 ## Introduction
 
 This project offers a robust reverse tunneling solution to overcome NAT and firewall restrictions, supporting various transport protocols. It’s engineered for high efficiency and concurrency.
+
+## BackhaulManager (third-party tool)
+
+For users who prefer an interactive terminal workflow, **[BackhaulManager](https://github.com/B3hnamR/BackhaulManager)** is a community-maintained tool for creating and managing Backhaul tunnels on Linux. Its documented features include guided Iran/server and Kharej/client setup, systemd service management, tunnel monitoring, a health watchdog, metrics history, safe restart, and optional Telegram alerts. It currently documents support for `tcp`, `tcpmux`, `wsmux`, and `wssmux`.
+
+> **Important — binary source:** BackhaulManager’s built-in **GitHub** installation option downloads releases from `Musixal/Backhaul`, not this fork. To use `power0matin/Backhaul`, download the matching archive from this repository’s [releases](https://github.com/power0matin/Backhaul/releases) and choose **Local file** in BackhaulManager, or provide this fork’s release asset through **Mirror URL**. Do not use the default upstream download option expecting it to install this fork.
+
+BackhaulManager is an independent third-party project and is not maintained or officially supported by this repository. Review its installation script and permissions before running it with root privileges.
 
 ## v0.8.0 production hardening
 
