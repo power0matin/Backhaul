@@ -144,7 +144,7 @@ Configuration is checked before startup and before a changed file replaces a hea
 | `connection_pool` / `max_pool_size` | 1–100000; max pool must be at least the initial pool |
 | `mux_version` | 1 or 2 |
 | `mux_framesize` | 1–65535 bytes |
-| Mux receive/stream buffers | 1–256 MiB; stream buffer cannot exceed receive buffer |
+| Mux receive/stream buffers | 1 byte–256 MiB; stream buffer cannot exceed receive buffer |
 | `udp_queue_size` | 1–4096 |
 | `udp_queue_limit` | 1–16384 |
 | `udp_max_flows` | 1–65536 |
