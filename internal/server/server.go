@@ -53,6 +53,7 @@ func (s *Server) Start() {
 			WebPassword:   s.config.WebPassword,
 			SnifferLog:    s.config.SnifferLog,
 			AcceptUDP:     s.config.AcceptUDP,
+			AllowLegacyDataConnections: s.config.AllowLegacyDataConnections,
 			MSS:           s.config.MSS,
 			SO_RCVBUF:     s.config.SO_RCVBUF,
 			SO_SNDBUF:     s.config.SO_SNDBUF,
@@ -89,6 +90,7 @@ func (s *Server) Start() {
 			SO_RCVBUF:        s.config.SO_RCVBUF,
 			SO_SNDBUF:        s.config.SO_SNDBUF,
 			ProxyProtocol:    s.config.ProxyProtocol,
+			AllowLegacyDataConnections: s.config.AllowLegacyDataConnections,
 		}
 
 		tcpMuxServer := transport.NewTcpMuxServer(s.ctx, tcpMuxConfig, s.logger)
