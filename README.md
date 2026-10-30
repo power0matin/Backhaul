@@ -1,735 +1,156 @@
 <h1 align="center">Backhaul</h1>
 
-<!-- repo-badges:start -->
 <p align="center">
-  <a href="https://hits.sh/github.com/power0matin/Backhaul/"><img src="https://hits.sh/github.com/power0matin/Backhaul.svg?style=flat-square&amp;label=Views&amp;labelColor=18181B&amp;color=0EA5E9&amp;logo=github" alt="Repository Views"/></a>
-  <a href="https://github.com/power0matin/Backhaul/stargazers"><img src="https://img.shields.io/github/stars/power0matin/Backhaul?style=flat-square&amp;label=Stars&amp;labelColor=18181B&amp;color=F59E0B&amp;logo=github&amp;logoColor=white" alt="GitHub Stars"/></a>
-  <a href="https://github.com/power0matin/Backhaul/forks"><img src="https://img.shields.io/github/forks/power0matin/Backhaul?style=flat-square&amp;label=Forks&amp;labelColor=18181B&amp;color=6366F1&amp;logo=github&amp;logoColor=white" alt="GitHub Forks"/></a>
-  <a href="https://github.com/power0matin/Backhaul/issues"><img src="https://img.shields.io/github/issues/power0matin/Backhaul?style=flat-square&amp;label=Issues&amp;labelColor=18181B&amp;color=22C55E&amp;logo=github&amp;logoColor=white" alt="GitHub Issues"/></a>
-  <a href="LICENSE"><img src="https://img.shields.io/github/license/power0matin/Backhaul?style=flat-square&amp;label=License&amp;labelColor=18181B&amp;color=EF4444&amp;logo=github&amp;logoColor=white" alt="GitHub License"/></a>
+  <strong>Reverse tunneling for services behind NAT and restrictive firewalls.</strong>
 </p>
-<!-- repo-badges:end -->
 
-> **Official project page:** [matinshahabadi.ir/projects/backhaul/](https://matinshahabadi.ir/projects/backhaul/)
+<p align="center">
+  <a href="https://github.com/power0matin/Backhaul/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/power0matin/Backhaul/ci.yml?branch=main&style=flat-square&label=CI" alt="CI status"></a>
+  <a href="https://github.com/power0matin/Backhaul/releases"><img src="https://img.shields.io/github/v/release/power0matin/Backhaul?style=flat-square" alt="Latest release"></a>
+  <a href="https://github.com/power0matin/Backhaul/stargazers"><img src="https://img.shields.io/github/stars/power0matin/Backhaul?style=flat-square" alt="GitHub stars"></a>
+  <a href="https://github.com/power0matin/Backhaul/blob/main/LICENSE"><img src="https://img.shields.io/github/license/power0matin/Backhaul?style=flat-square" alt="License"></a>
+</p>
 
-Welcome to the **`Backhaul`** project! This project provides a high-performance reverse tunneling solution optimized for handling massive concurrent connections through NAT and firewalls. This README will guide you through setting up and configuring both server and client components, including details on different transport protocols.
+<p align="center">
+  <a href="https://matinshahabadi.ir/projects/backhaul/">Project page</a> ·
+  <a href="https://github.com/power0matin/backhaul-manager">Backhaul Manager</a> ·
+  <a href="https://github.com/power0matin/Backhaul/releases">Releases</a>
+</p>
 
----
+Backhaul creates an outbound tunnel from a client to a reachable server. The server can then expose selected ports and forward incoming connections to services available from the client, including hosts behind NAT or restrictive firewalls.
 
-## Table of Contents
+This repository is a production-focused fork of [Musixal/Backhaul](https://github.com/Musixal/Backhaul), based on upstream commit [`df7966f`](https://github.com/Musixal/Backhaul/commit/df7966f8f725837a680ea7b90bd37ea52666c277).
 
-1. [Introduction](#introduction)
-2. [Backhaul Manager](#backhaul-manager)
-3. [v0.8.0 production hardening](#v080-production-hardening)
-4. [v0.8.1 TCP data-channel authentication](#v081-tcp-data-channel-authentication)
-5. [Changelog](CHANGELOG.md)
-6. [Features](#features)
-7. [Installation](#installation)
-8. [Usage](#usage)
-   - [Configuration Options](#configuration-options)
-   - [Detailed Configuration](#detailed-configuration)
-      - [TCP Configuration](#tcp-configuration)
-      - [TCP Multiplexing Configuration](#tcp-multiplexing-configuration)
-      - [UDP Configuration](#udp-configuration)
-      - [WebSocket Configuration](#websocket-configuration)
-      - [Secure WebSocket Configuration](#secure-websocket-configuration)
-      - [WS Multiplexing Configuration](#ws-multiplexing-configuration)
-      - [WSS Multiplexing Configuration](#wss-multiplexing-configuration)
-9. [Generating a Self-Signed TLS Certificate with OpenSSL](#generating-a-self-signed-tls-certificate-with-openssl)
-10. [Running backhaul as a service](#running-backhaul-as-a-service)
-11. [FAQ](#faq)
-12. [Benchmark](#benchmark)
-13. [License](#license)
-14. [Donation](#donation)
----
+## Highlights
 
-## Introduction
-
-Backhaul is a high-performance reverse-tunneling tool for bypassing NAT and firewall restrictions, with support for multiple transports and concurrent connections.
-
-## Backhaul Manager
-
-[**Backhaul Manager**](https://github.com/power0matin/backhaul-manager) is the companion installer and operations tool for configuring both tunnel endpoints.
-
-| Capability | Details |
+| Area | What this fork provides |
 |---|---|
-| Setup | Guided Iran-server and foreign-client configuration; standard and advanced modes |
-| Transports | `tcp`, `tcpmux`, `udp`, `ws`, `wss`, `wsmux`, `wssmux` |
-| Management | Profiles, link tests, backups, migration, health checks, diagnostics, logs and CLI |
+| Transport support | Seven transports, including TCP, UDP, WebSocket, TLS WebSocket and multiplexed variants |
+| Resource limits | Bounded UDP queues and flow tracking, capped client pool growth and bounded TCP backpressure |
+| Reliability | Validated configuration reloads, fresh reconnect generations and cancellation-aware retries |
+| Security | HMAC-SHA256 authentication for pooled TCP/TCPMUX data channels; safer monitor and TLS defaults |
+| Observability | Web monitor, process/host metrics, connection counters and optional traffic statistics |
 
-It uses **`power0matin/Backhaul`** as its recommended binary source and also supports upstream `Musixal/Backhaul`. See the [manager documentation](https://github.com/power0matin/backhaul-manager#readme). Root access is required for installation and service management; review the script before running it.
+## Transports
 
-## v0.8.0 production hardening
-
-Based on upstream v0.7.2 (`df7966f8f725837a680ea7b90bd37ea52666c277`), this release hardened resource limits, recovery and monitoring without changing transport framing.
-
-| Area | Improvement |
+| Transport | Description |
 |---|---|
-| UDP | Bounded queues and flow limits: `64` packets/flow, `4096` queued packets total, `2048` flows by default |
-| TCP | Up to 250 ms bounded backpressure before rejecting a full local queue |
-| Reconnects | Fresh lifecycle generations and cancellation-aware retries with bounded jitter |
-| Client pool | Adaptive growth capped by `max_pool_size` |
-| Configuration | Validation before startup and hot reload; invalid edits keep the healthy running generation |
-| Monitoring | Loopback-only web monitor by default; optional HTTP Basic auth; loopback-only pprof |
-| Statistics | `/stats` reports connections, pool use, reconnects, drops/rejections, uptime, goroutines and live heap |
+| `tcp` | TCP tunnel; optionally supports UDP forwarding with `accept_udp` |
+| `tcpmux` | TCP tunnel with SMUX multiplexing |
+| `udp` | UDP transport |
+| `ws` / `wss` | WebSocket / WebSocket over TLS |
+| `wsmux` / `wssmux` | Multiplexed WebSocket / multiplexed WebSocket over TLS |
 
-See [PERFORMANCE.md](./PERFORMANCE.md) for benchmarks, stress/soak results and the detailed audit.
-
-## v0.8.1 TCP data-channel authentication
-
-TCP/TCPMUX pooled connections now authenticate each data channel with a server challenge and HMAC-SHA256 proof. The tunnel token is never sent on pooled data connections; source-IP matching remains an additional restriction.
-
-| Item | Behavior |
-|---|---|
-| Default | Unauthenticated pool connections are rejected; legacy mode is disabled |
-| Upgrade order | Upgrade the server first, then every paired client |
-| Older clients | Temporarily set `allow_legacy_data_connections = true` on the TCP/TCPMUX server during the rolling upgrade, then set it back to `false` |
-| Other transports | Keep their existing transport-level authentication behavior |
-
-**Do not leave legacy mode enabled on an Internet-facing listener.** New v0.8.1 clients require the new server-side handshake.
-
-## Features
-
-| Feature | Description |
-|---|---|
-| Performance | Designed for high concurrency and efficient resource use |
-| Transports | TCP, UDP, WS and WSS, including multiplexed variants |
-| UDP forwarding | UDP encapsulation over TCP with congestion control |
-| Multiplexing | Multiple sessions over a single transport using SMUX |
-| Security | Token authentication and TLS support for WSS |
-| Operations | Traffic sniffing, configurable keepalive, web monitoring and hot reload |
+Use `wss` or `wssmux` when the tunnel transport itself must be protected by TLS. Plain `tcp`, `tcpmux`, `ws`, `wsmux`, and `udp` do not provide TLS encryption.
 
 ## Installation
 
-### Easy tunnel setup
+### Guided setup
 
-For guided installation and configuration on both tunnel endpoints, use [**Backhaul Manager**](https://github.com/power0matin/backhaul-manager?utm_source=chatgpt.com). It supports this fork as its recommended binary source and simplifies tunnel setup and management.
+For the simplest setup, use **[Backhaul Manager](https://github.com/power0matin/backhaul-manager)**. It provides an interactive installer and manager for both tunnel endpoints, supports this fork as its recommended binary source, and includes profiles, link tests, backups, migration and health checks.
 
-### Manual installation
+[**Install and configure a tunnel with Backhaul Manager →**](https://github.com/power0matin/backhaul-manager?utm_source=chatgpt.com)
 
-| Step | Command |
-|---|---|
-| Download | Get the matching Linux archive from the [latest release](https://github.com/power0matin/Backhaul/releases) |
-| Extract | `tar -xzf backhaul_linux_amd64.tar.gz` |
-| Run | `./backhaul -c config.toml` |
+### Prebuilt binaries
 
-To build from source:
+Download the matching archive from [GitHub Releases](https://github.com/power0matin/Backhaul/releases). Releases include Linux and macOS builds for `amd64` and `arm64`, plus SHA-256 checksums.
+
+Example for Linux:
+
+```bash
+ARCH=amd64 # use arm64 on ARM64 systems
+
+curl -fLO "https://github.com/power0matin/Backhaul/releases/latest/download/backhaul_linux_${ARCH}.tar.gz"
+curl -fLO "https://github.com/power0matin/Backhaul/releases/latest/download/checksums.txt"
+
+sha256sum --ignore-missing -c checksums.txt
+tar -xzf "backhaul_linux_${ARCH}.tar.gz"
+
+./backhaul -v
+```
+
+### Build from source
+
+Requires Go 1.23.1 or newer.
 
 ```bash
 git clone https://github.com/power0matin/Backhaul.git
 cd Backhaul
-go build
-./backhaul -c config.toml
+go build -o backhaul .
+./backhaul -v
 ```
 
-## TCP half-close behavior
+## Quick start
 
-The plain `tcp` transport preserves TCP half-close: a client may finish sending a request while still receiving the response. Multiplexed transports using the currently pinned smux API do not expose a write-side-only close; an EOF there closes that stream rather than preserving a half-open stream. Do not rely on request/response-after-half-close behavior with TCPMUX/WSMUX/WSSMUX until the mux implementation supports it.
+The following example exposes port `443` on the server and forwards it to `127.0.0.1:443` on the client. Replace the example token with the same strong, unique secret on both endpoints.
 
-## Usage
+**Server — `server.toml`:**
 
-The main executable for this project is `backhaul`. It requires a TOML configuration file for both the server and client components.
-
-### Configuration Options
-
-To start using the solution, you'll need to configure both server and client components. Here’s how to set up basic configurations:
-
-* **Server Configuration**
-
-   Create a configuration file named `config.toml`:
-
-    ```toml
-    [server]# Local, IRAN
-    bind_addr = "0.0.0.0:3080"    # Address and port for the server to listen on (mandatory).
-    transport = "tcp"             # Protocol to use ("tcp", "tcpmux", "ws", "wss", "wsmux", "wssmux". mandatory).
-    accept_udp = false             # Only supported by transport = "tcp". (optional, default: false)
-     proxy_protocol = false         # Only supported by tcp, tcpmux, wsmux, and wssmux.
-    token = "your_token"          # Shared strong secret; required and identical on server and client.
-    allow_legacy_data_connections = false # TCP/TCPMUX only; temporary old-client migration switch. Keep false in normal operation.
-    keepalive_period = 75         # Interval in seconds to send keep-alive packets (1–86400; default: 75).
-    nodelay = false               # Enable TCP_NODELAY (optional, default: false).
-    channel_size = 2048           # Bounded tunnel/local queue size. Brief saturation gets bounded backpressure; persistent overload is rejected. (optional, default: 2048).
-    heartbeat = 40                # Ping interval in seconds (1–86400; default: 40).
-    mux_con = 8                   # Mux concurrency. Number of connections that can be multiplexed into a single stream (optional, default: 8).
-    mux_version = 1               # SMUX protocol version (1 or 2). Version 2 may have extra features. (optional)
-    mux_framesize = 32768         # 32 KB. The maximum size of a frame that can be sent over a connection. (optional)
-    mux_recievebuffer = 4194304   # 4 MB. The maximum buffer size for incoming data per connection. (optional)
-    mux_streambuffer = 65536      # 64 KB. The maximum buffer size per individual stream within a connection. (optional)
-    sniffer = false               # Enable or disable network sniffing for monitoring data. (optional, default false)
-    web_port = 2060               # Port number for the web interface or monitoring interface. (optional, set to 0 to disable).
-    web_bind_addr = "127.0.0.1"   # Monitor bind address. Defaults to loopback in v0.8.0.
-    web_username = "operator"     # Optional HTTP Basic username; set username and password together.
-    web_password = "change-me"    # Optional HTTP Basic password.
-    sniffer_log ="/root/log.json" # Filename used to store network traffic and usage data logs. (optional, default: config directory/backhaul.json)
-    tls_cert = "/root/server.crt" # Path to the TLS certificate file for wss/wssmux. (mandatory).
-    tls_key = "/root/server.key"  # Path to the TLS private key file for wss/wssmux. (mandatory).
-    log_level = "info"            # Log level ("panic", "fatal", "error", "warn", "info", "debug", "trace", optional, default: "info").
-    skip_optz = true              # Skip host-wide sysctl tuning (default when omitted; set false to opt in)
-
-# Linux TCP tuning changes host-wide sysctl values. If this key is omitted it
-# is treated as true; set skip_optz = false only when you intend those changes.
-    mss = 1360                    # TCP/TCPMux: Maximum Segment Size in bytes; controls max TCP payload size to avoid fragmentation. (default: system-defined)
-    so_rcvbuf = 4194304           # TCP/TCPMux: Socket receive buffer size (bytes); larger buffer allows higher throughput on receive side. (default: system-defined)
-    so_sndbuf = 1048576           # TCP/TCPMux: Socket send buffer size (bytes); controls send queue size to manage outgoing data flow. (default: system-defined)
-    udp_queue_size = 64            # UDP/accept_udp queued packets per flow. (optional, default: 64)
-    udp_queue_limit = 4096         # UDP/accept_udp queued packets across all flows. (optional, default: 4096; max: 16384)
-    udp_max_flows = 2048           # Maximum simultaneously tracked UDP flows. (optional, default: 2048)
-
-    # Example rules only: local port ranges/listeners must not overlap.
-    # Choose mappings for your deployment and keep their local ports unique.
-    ports = [
-    "443-450=5201",             # Listen on 443–450 and forward to remote port 5201
-    "4000=5000",                # Listen on local port 4000 and forward to remote port 5000
-    "127.0.0.2:8443=5201",      # Bind specifically to 127.0.0.2:8443
-   ]
-
-    ```
-
-   To start the `server`:
-
-   ```sh
-   ./backhaul -c config.toml
-   ```
-* **Client Configuration**
-
-   The server may listen on `0.0.0.0:PORT` to accept connections on all local interfaces. The client must instead use the server's reachable public IP address or hostname, for example `server.example.com:3080`; `0.0.0.0` is not a remote destination.
-
-   Create a configuration file named `config.toml` for the client:
-   ```toml
-   [client]  # Behind NAT, firewall-blocked
-   remote_addr = "server.example.com:3080"  # Server address and port (mandatory).
-   edge_ip = "188.114.96.0"      # Edge IP used for CDN connection, specifically for WebSocket-based transports.(Optional, default none)
-   transport = "tcp"             # Protocol to use ("tcp", "tcpmux", "ws", "wss", "wsmux", "wssmux". mandatory).
-   token = "your_token"          # Shared strong secret; required and identical on server and client.
-   connection_pool = 8           # Number of pre-established connections.(optional, default: 8).
-   max_pool_size = 32            # Upper bound for adaptive pool growth. If omitted, derived from connection_pool.
-   aggressive_pool = false       # Enables aggressive connection pool management.(optional, default: false).
-   keepalive_period = 75         # Interval in seconds to send keep-alive packets. (optional, default: 75s)
-   nodelay = false               # Use TCP_NODELAY (optional, default: false).
-   retry_interval = 3            # Retry interval in seconds (optional, default: 3s).
-   dial_timeout = 10             # Sets the max wait time for establishing a network connection. (optional, default: 10s)
-   mux_version = 1               # SMUX protocol version (1 or 2). Version 2 may have extra features. (optional)
-   mux_framesize = 32768         # 32 KB. The maximum size of a frame that can be sent over a connection. (optional)
-   mux_recievebuffer = 4194304   # 4 MB. The maximum buffer size for incoming data per connection. (optional)
-   mux_streambuffer = 65536      # 256 KB. The maximum buffer size per individual stream within a connection. (optional)
-   sniffer = false               # Enable or disable network sniffing for monitoring data. (optional, default false)
-   web_port = 2060               # Port number for the web interface or monitoring interface. (optional, set to 0 to disable).
-   web_bind_addr = "127.0.0.1"   # Monitor bind address. Defaults to loopback in v0.8.0.
-   web_username = "operator"     # Optional HTTP Basic username; set both credentials together.
-   web_password = "change-me"    # Optional HTTP Basic password.
-   sniffer_log ="/root/log.json" # Filename used to store network traffic and usage data logs. (optional, default: config directory/backhaul.json)
-   log_level = "info"            # Log level ("panic", "fatal", "error", "warn", "info", "debug", "trace", optional, default: "info").
-   skip_optz = true              # Skip optimizations performed by Backhaul (default: false)
-   mss = 1360                    # TCP/TCPMux: Maximum Segment Size in bytes; controls max TCP payload size to avoid fragmentation. (default: system-defined)
-   so_rcvbuf = 1048576           # TCP/TCPMux: Socket receive buffer size (bytes); larger buffer allows higher throughput on receive side. (default: system-defined)
-   so_sndbuf = 4194304           # TCP/TCPMux: Socket send buffer size (bytes); controls send queue size to manage outgoing data flow. (default: system-defined)
-   tls_verify = true              # WSS/WSSMUX only. Omitted value defaults to true; false explicitly disables certificate verification.
-   ```
-
-   To start the `client`:
-
-   ```sh
-   ./backhaul -c config.toml
-   ```
-
-### Detailed Configuration
-#### TCP Configuration
-* **Server**:
-
-   ```toml
-   [server]
-   bind_addr = "0.0.0.0:3080"
-   transport = "tcp"
-   accept_udp = false 
-   token = "your_token"
-   keepalive_period = 75  
-   nodelay = true 
-   heartbeat = 40 
-   channel_size = 2048
-   sniffer = false 
-   web_port = 2060
-   sniffer_log = "/root/backhaul.json"
-   log_level = "info"
-   ports = []
-   ```
-* **Client**:
-
-   ```toml
-   [client]
-   remote_addr = "server.example.com:3080"
-   transport = "tcp"
-   token = "your_token" 
-   connection_pool = 8
-   aggressive_pool = false
-   keepalive_period = 75
-   dial_timeout = 10
-   nodelay = true 
-   retry_interval = 3
-   sniffer = false
-   web_port = 2060 
-   sniffer_log = "/root/backhaul.json"
-   log_level = "info"
-
-   ```
-* **Details**:
-
-   `remote_addr`: The IPv4, IPv6, or domain address of the server to which the client connects.
-
-   `token`: An authentication token used to securely validate and authenticate the connection between the client and server within the tunnel.
-
-   `channel_size`: The queue size for forwarding packets from server to the client. If the limit is exceeded, packets will be dropped.
-
-   `connection_pool`: Set the number of pre-established connections for better latency.
-
-   `max_pool_size`: Hard ceiling for adaptive pool growth. This prevents
-   long-running load from increasing the pool without a bound.
-   
-   `nodelay`: Refers to a TCP socket option (TCP_NODELAY) that improve the latency but decrease the bandwidth
-
-### Monitoring and security
-
-When `web_port` is enabled, v0.8.0 listens on `127.0.0.1` by default.
-Existing installations that intentionally need remote access can set
-`web_bind_addr = "0.0.0.0"` (or another explicit interface). If the monitor
-is reachable from an untrusted network, set both `web_username` and
-`web_password` and put the HTTP monitor behind a TLS reverse proxy or access
-it through an SSH tunnel. Basic authentication by itself does not encrypt the
-credentials.
-
-`pprof = true` exposes the Go profiler only on `127.0.0.1:6060` (server) or
-`127.0.0.1:6061` (client). Configuration files contain the tunnel token and
-possibly monitor credentials; use restrictive permissions such as
-`chmod 600 config.toml`.
-
-For `wss` and `wssmux`, `tls_verify` defaults to `true` when omitted.
-Set it to `false` only as an explicit compatibility exception for a deliberate
-self-signed or otherwise untrusted certificate deployment. Public deployments
-should keep certificate and hostname verification enabled.
-
-### v0.7.2 compatibility notes
-
-All v0.7.2 configuration field names and transport names are retained. TCP,
-TCPMUX, UDP, WS, WSS, WSMUX, and WSSMUX use the existing protocol framing.
-There are two intentional operational changes:
-
-* An enabled web monitor without `web_bind_addr` is now loopback-only. Set
-  `web_bind_addr = "0.0.0.0"` to restore the old all-interface binding.
-* Invalid values and malformed port mappings now fail configuration validation
-  instead of being accepted and failing later in a worker. Range forwarding
-  uses `"443-600=5201"`; the old README example
-  `"443-600:5201"` was not a format the implementation supported.
-
-#### TCP Multiplexing Configuration
-* **Server**:
-
-   ```toml
-   [server]
-   bind_addr = "0.0.0.0:3080"
-   transport = "tcpmux"
-   token = "your_token" 
-   keepalive_period = 75
-   nodelay = true 
-   heartbeat = 40 
-   channel_size = 2048
-   mux_con = 8
-   mux_version = 1
-   mux_framesize = 32768 
-   mux_recievebuffer = 4194304
-   mux_streambuffer = 65536 
-   sniffer = false 
-   web_port = 2060
-   sniffer_log = "/root/backhaul.json"
-   log_level = "info"
-   ports = []
-   ```
-* **Client**:
-
-   ```toml
-   [client]
-   remote_addr = "server.example.com:3080"
-   transport = "tcpmux"
-   token = "your_token" 
-   connection_pool = 8
-   aggressive_pool = false
-   keepalive_period = 75
-   dial_timeout = 10
-   retry_interval = 3
-   nodelay = true 
-   mux_version = 1
-   mux_framesize = 32768 
-   mux_recievebuffer = 4194304
-   mux_streambuffer = 65536 
-   sniffer = false 
-   web_port = 2060
-   sniffer_log = "/root/backhaul.json"
-   log_level = "info"
-   ```
-* **Details**:
-
-   `mux_session`: Number of multiplexed sessions. Increase this if you need to handle more simultaneous sessions over a single connection.
-   
-   * Refer to TCP configuration for more information.
-
-#### UDP Configuration
-* **Server**:
-
-   ```toml
-   [server]
-   bind_addr = "0.0.0.0:3080"
-   transport = "udp"
-   token = "your_token"
-   heartbeat = 20 
-   channel_size = 2048
-   sniffer = false 
-   web_port = 2060
-   sniffer_log = "/root/backhaul.json"
-   log_level = "info"
-   ports = []
-   ```
-* **Client**:
-
-   ```toml
-   [client]
-   remote_addr = "server.example.com:3080"
-   transport = "udp"
-   token = "your_token" 
-   connection_pool = 8
-   aggressive_pool = false
-   retry_interval = 3
-   sniffer = false
-   web_port = 2060 
-   sniffer_log = "/root/backhaul.json"
-   log_level = "info"
-
-   ```
-   
-#### WebSocket Configuration
-* **Server**:
-
-   ```toml
-   [server]
-   bind_addr = "0.0.0.0:8080"
-   transport = "ws"
-   token = "your_token" 
-   channel_size = 2048
-   keepalive_period = 75 
-   heartbeat = 40
-   nodelay = true 
-   sniffer = false 
-   web_port = 2060
-   sniffer_log = "/root/backhaul.json"
-   log_level = "info"
-   ports = []
-   ```
-
-* **Client**:
-
-   ```toml
-   [client]
-   remote_addr = "server.example.com:8080"
-   edge_ip = "" 
-   transport = "ws"
-   token = "your_token" 
-   connection_pool = 8
-   aggressive_pool = false
-   keepalive_period = 75 
-   dial_timeout = 10
-   retry_interval = 3
-   nodelay = true 
-   sniffer = false 
-   web_port = 2060
-   sniffer_log = "/root/backhaul.json"
-   log_level = "info"
-   ```
-
-* **Details**:
-
-   * Refer to TCP configuration for more information.
-
-#### Secure WebSocket Configuration
-
-For WSS clients, `client.tls_verify` defaults to `true` when omitted. Keep certificate verification enabled on public networks; set it to `false` only for a deliberate, restricted setup that accepts an untrusted certificate.
-* **Server**:
-
-   ```toml
-   [server]
-   bind_addr = "0.0.0.0:8443"
-   transport = "wss"
-   token = "your_token" 
-   channel_size = 2048
-   keepalive_period = 75 
-   nodelay = true 
-   tls_cert = "/root/server.crt"      
-   tls_key = "/root/server.key"
-   sniffer = false 
-   web_port = 2060
-   sniffer_log = "/root/backhaul.json"
-   log_level = "info"
-   ports = []
-   ```
-
-* **Client**:
-
-   ```toml
-   [client]
-   remote_addr = "server.example.com:8443"
-   edge_ip = "" 
-   transport = "wss"
-   token = "your_token" 
-   connection_pool = 8
-   aggressive_pool = false
-   keepalive_period = 75
-   dial_timeout = 10
-   retry_interval = 3  
-   nodelay = true 
-   sniffer = false 
-   web_port = 2060
-   sniffer_log = "/root/backhaul.json"
-   log_level = "info"
-   ```
-
-* **Details**:
-
-   * Refer to the next section for instructions on generating `tls_cert` and `tls_key`.
-
-#### WS Multiplexing Configuration
-* **Server**:
-
-   ```toml
-   [server]
-   bind_addr = "0.0.0.0:3080"
-   transport = "wsmux"
-   token = "your_token" 
-   keepalive_period = 75
-   nodelay = true 
-   heartbeat = 40 
-   channel_size = 2048
-   mux_con = 8
-   mux_version = 1
-   mux_framesize = 32768 
-   mux_recievebuffer = 4194304
-   mux_streambuffer = 65536 
-   sniffer = false 
-   web_port = 2060
-   sniffer_log = "/root/backhaul.json"
-   log_level = "info"
-   ports = []
-   ```
-* **Client**:
-
-   ```toml
-   [client]
-   remote_addr = "server.example.com:3080"
-   edge_ip = "" 
-   transport = "wsmux"
-   token = "your_token" 
-   connection_pool = 8
-   aggressive_pool = false
-   keepalive_period = 75
-   dial_timeout = 10
-   nodelay = true
-   retry_interval = 3
-   mux_version = 1
-   mux_framesize = 32768 
-   mux_recievebuffer = 4194304
-   mux_streambuffer = 65536 
-   sniffer = false 
-   web_port = 2060
-   sniffer_log = "/root/backhaul.json"
-   log_level = "info"
-   ```
-
-#### WSS Multiplexing Configuration
-* **Server**:
-
-   ```toml
-   [server]
-   bind_addr = "0.0.0.0:443"
-   transport = "wssmux"
-   token = "your_token" 
-   keepalive_period = 75
-   nodelay = true 
-   heartbeat = 40 
-   channel_size = 2048
-   mux_con = 8
-   mux_version = 1
-   mux_framesize = 32768 
-   mux_recievebuffer = 4194304
-   mux_streambuffer = 65536 
-   tls_cert = "/root/server.crt"      
-   tls_key = "/root/server.key"
-   sniffer = false 
-   web_port = 2060
-   sniffer_log = "/root/backhaul.json"
-   log_level = "info"
-   ports = []
-   ```
-* **Client**:
-
-   ```toml
-   [client]
-   remote_addr = "server.example.com:443"
-   edge_ip = "" 
-   transport = "wssmux"
-   token = "your_token" 
-   keepalive_period = 75
-   dial_timeout = 10
-   nodelay = true
-   retry_interval = 3
-   connection_pool = 8
-   aggressive_pool = false
-   mux_version = 1
-   mux_framesize = 32768 
-   mux_recievebuffer = 4194304
-   mux_streambuffer = 65536  
-   sniffer = false 
-   web_port = 2060
-   sniffer_log = "/root/backhaul.json"
-   log_level = "info"
-   ```
-
-## Generating a Self-Signed TLS Certificate with OpenSSL
-
-To generate a TLS certificate and key, you can use tools like OpenSSL. Here’s a step-by-step guide on how to create a self-signed certificate and key using OpenSSL:
-
-### Step 1: Install OpenSSL
-
-If you don't already have OpenSSL installed, you can install it using your system's package manager.
-
-- **On Ubuntu/Debian**:
-  ```bash
-  sudo apt-get install openssl
-  ```
-### Step 2: Generate a Private Key
-To generate a 2048-bit RSA private key, run the following command:
-  ```bash
-openssl genpkey -algorithm RSA -out server.key -pkeyopt rsa_keygen_bits:2048
-  ```
-This will create a file named `server.key`, which is your private key.
-### Step 3: Generate a Certificate Signing Request (CSR)
-
-Create a Certificate Signing Request (CSR) using the private key. This CSR is used to generate the SSL certificate:
-  ```bash
-openssl req -new -key server.key -out server.csr
-  ```
-
-You will be prompted to enter information for the CSR. For the common name (CN), use the domain name or IP address where your server will be hosted. Example:
-```
-Country Name (2 letter code) [AU]:US
-State or Province Name (full name) [Some-State]:California
-Locality Name (eg, city) []:San Francisco
-Organization Name (eg, company) [Internet Widgits Pty Ltd]:Your Company Name
-Organizational Unit Name (eg, section) []:
-Common Name (e.g. server FQDN or YOUR name) []:example.com
-Email Address []:
+```toml
+[server]
+bind_addr = "0.0.0.0:3080"
+transport = "tcp"
+token = "CHANGE_THIS_TO_THE_SAME_RANDOM_SECRET"
+ports = ["443=443"]
 ```
 
-### Step 4: Generate a Self-Signed Certificate
+**Client — `client.toml`:**
 
-Use the CSR and private key to generate a self-signed certificate. Specify the validity period (in days):
-  ```bash
-openssl x509 -req -in server.csr -signkey server.key -out server.crt -days 365
-  ```
-This will generate a certificate named `server.crt`, valid for 365 days.
-### Recap of the Files Generated:
-
-* `server.key`: Your private key.
-* `server.csr`: The certificate signing request (used to generate the certificate).
-* `server.crt`: Your self-signed TLS certificate.
-
-## Running backhaul as a service
-
-To create a service file for your backhaul project that ensures the service restarts automatically, you can use the following template for a systemd service file. Assuming your project runs a reverse tunnel and the main executable file is located in a certain path, here's a basic example:
-
-1. Create the service file `/etc/systemd/system/backhaul.service`:
-
-```ini
-[Unit]
-Description=Backhaul Reverse Tunnel Service
-After=network.target
-
-[Service]
-Type=simple
-ExecStart=/root/backhaul -c /root/config.toml
-Restart=always
-RestartSec=3
-LimitNOFILE=1048576
-
-[Install]
-WantedBy=multi-user.target
+```toml
+[client]
+remote_addr = "SERVER_PUBLIC_IP:3080"
+transport = "tcp"
+token = "CHANGE_THIS_TO_THE_SAME_RANDOM_SECRET"
+connection_pool = 8
 ```
-2. After creating the service file, enable and start the service:
+
+Start the server on the **server host**:
 
 ```bash
-sudo systemctl daemon-reload
-sudo systemctl enable backhaul.service
-sudo systemctl start backhaul.service
+./backhaul -c server.toml
 ```
-3. To verify if the service is running:
+
+Start the client on the **client host**:
+
 ```bash
-sudo systemctl status backhaul.service
+./backhaul -c client.toml
 ```
-4. View the most recent log entries for the backhaul.service unit:
+
+A port-only target such as `443` resolves to `127.0.0.1:443` on the client. To target another client-side host, use an explicit address such as `10.0.0.5:443`. Allow the tunnel control port (`3080/tcp`) and the exposed server listener (`443/tcp`) through the relevant firewalls. Restrict the control port to the client address where possible.
+
+For all configuration keys, defaults and transport-specific restrictions, see the [Configuration Reference](docs/configuration.md).
+
+## Security and upgrades
+
+- Configure a strong, unique `token` on both endpoints. The token is required; the built-in legacy value `musix` is rejected.
+- In v0.8.1, every pooled TCP/TCPMUX data connection proves possession of the token with a server challenge and HMAC-SHA256. The token itself is not sent on those data connections.
+- For TCP/TCPMUX rolling upgrades, upgrade the **server first**, then all paired clients. Temporarily enable `allow_legacy_data_connections = true` on the server only while old clients remain, then disable it again. Never leave legacy mode enabled on a public listener.
+- WSS/WSSMUX requires a certificate and private key on the server. Client certificate verification defaults to enabled; keep it enabled with a trusted certificate.
+- The web monitor binds to loopback by default. Non-loopback monitor access requires both HTTP Basic credentials; use a TLS reverse proxy or SSH tunnel because Basic authentication does not encrypt traffic.
+- Host-wide TCP sysctl tuning is opt-in. The default `skip_optz = true` avoids changing host settings.
+
+See the [Configuration Reference](docs/configuration.md) for monitor, TLS, PROXY protocol, UDP and migration settings.
+
+## Development
+
 ```bash
-journalctl -u backhaul.service -e -f
+go build ./...
+go test ./...
+go test -race ./...
+go vet ./...
 ```
 
-## FAQ
+The GitHub Actions workflow runs tests and vet with Go 1.25.12 and 1.26.5, race tests, and Linux `amd64`/`arm64` cross-builds.
 
-**Q: How do I decide which transport protocol to use?**
+## Project documentation
 
-* `tcp`: Use if you need straightforward TCP connections.
-* `tcpmux`: Use if you need to handle multiple sessions over a single connection.
-* `ws`: Use if you need to traverse HTTP-based firewalls or proxies.
-* `wss`: Use this for secure WebSocket connections that need to traverse HTTP-based firewalls or proxies. It encrypts data for added security, similar to WS but with encryption.
+| Document | Description |
+|---|---|
+| [Configuration Reference](docs/configuration.md) | Configuration keys, defaults, restrictions and examples |
+| [Changelog](CHANGELOG.md) | Release changes and upgrade notes |
+| [Performance report](PERFORMANCE.md) | Benchmark methodology, measurements and engineering audit |
+| [Hardening roadmap](HARDENING_ROADMAP.md) | Security and reliability work |
+| [Backhaul Manager](https://github.com/power0matin/backhaul-manager) | Interactive installation and tunnel management |
+| [Upstream project](https://github.com/Musixal/Backhaul) | Original Backhaul project |
 
-## Benchmark
-
-The reproducible v0.7.2 vs v0.8.0 methodology and results are in
-[PERFORMANCE.md](./PERFORMANCE.md). The files under [benchmark](./benchmark/)
-also contain the executable Go benchmark harness and legacy upstream results.
-
-## License
-
-This project is licensed under the AGPL-3.0 license. See the LICENSE file for details.
-
-## Donation
-
-Donate TRX (TRC-20) to support our project:
-``` wallet
-TMVBGzX4qpt12R1qWsJMpT1ttoKH1kus1H
-```
-Thanks for your support! 
-
-## Stargazers over time
-[![Stargazers over time](https://starchart.cc/Musixal/Backhaul.svg?variant=light)](https://starchart.cc/Musixal/Backhaul)
-
-## Contact
-
-**Matin Shahabadi**
-
-- Website: [matinshahabadi.ir](https://matinshahabadi.ir)
-- Email: [me@matinshahabadi.ir](mailto:me@matinshahabadi.ir)
-- GitHub: [power0matin](https://github.com/power0matin)
-- LinkedIn: [matin-shahabadi](https://www.linkedin.com/in/matin-shahabadi)
-
-<p align="center">
-  <b>If this helped you, consider giving it a star!</b><br>
-  <sub>Your support keeps the project alive and helps others find it.</sub>
-</p>
-
-<!-- Copy-paste in your Readme.md file -->
-<p align="center">
-  <a href="https://next.ossinsight.io/widgets/official/analyze-repo-stars-history?repo_id=1325969524" target="_blank" style="display: block" align="center">
-    <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="https://next.ossinsight.io/widgets/official/analyze-repo-stars-history/thumbnail.png?repo_id=1325969524&amp;image_size=auto&amp;color_scheme=dark" width="721" height="auto">
-      <img alt="Star History of power0matin/Backhaul" src="https://next.ossinsight.io/widgets/official/analyze-repo-stars-history/thumbnail.png?repo_id=1325969524&amp;image_size=auto&amp;color_scheme=light" width="721" height="auto">
-    </picture>
-  </a>
-</p>
-
-<!-- Made with [OSS Insight](https://ossinsight.io/) -->
-
-<p align="center">
-  Created by <a href="https://github.com/power0matin">power0matin</a>
-</p>
+Licensed under [AGPL-3.0](LICENSE).
