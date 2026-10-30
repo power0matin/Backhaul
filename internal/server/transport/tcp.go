@@ -342,56 +342,89 @@ func (s *TcpTransport) tunnelListener() {
 }
 
 func (s *TcpTransport) acceptTunnelConn(listener net.Listener) {
+	dataWorkers := make(chan struct{}, maxConcurrentControlHandshakes)
 	for {
 		select {
 		case <-s.ctx.Done():
 			return
 		default:
-			s.logger.Debugf("waiting for accept incoming tunnel connection on %s", listener.Addr().String())
 			conn, err := listener.Accept()
 			if err != nil {
-				s.logger.Debugf("failed to accept tunnel connection on %s: %v", listener.Addr().String(), err)
+				if s.ctx.Err() != nil {
+					return
+				}
+				s.logger.Debugf("failed to accept tunnel connection on %s: %v", listener.Addr(), err)
 				continue
 			}
 
-			//discard any non tcp connection
 			tcpConn, ok := conn.(*net.TCPConn)
 			if !ok {
-				s.logger.Warnf("disarded non-TCP tunnel connection from %s", conn.RemoteAddr().String())
-				conn.Close()
+				s.logger.Warnf("discarded non-TCP tunnel connection from %s", conn.RemoteAddr())
+				_ = conn.Close()
 				continue
 			}
 
-			// Drop all suspicious packets from other address rather than server
 			control := s.getControlChannel()
-			if control != nil && control.RemoteAddr().(*net.TCPAddr).IP.String() != tcpConn.RemoteAddr().(*net.TCPAddr).IP.String() {
-				s.logger.Debugf("suspicious packet from %v. expected address: %v. discarding packet...", tcpConn.RemoteAddr().(*net.TCPAddr).IP.String(), control.RemoteAddr().(*net.TCPAddr).IP.String())
-				tcpConn.Close()
-				continue
-			}
-
-			// trying to set tcpnodelay
-			if !s.config.Nodelay {
-				if err := tcpConn.SetNoDelay(s.config.Nodelay); err != nil {
-					s.logger.Warnf("failed to set TCP_NODELAY for %s: %v", tcpConn.RemoteAddr().String(), err)
-				} else {
-					s.logger.Tracef("TCP_NODELAY disabled for %s", tcpConn.RemoteAddr().String())
+			if control != nil {
+				controlPeer, controlOK := control.RemoteAddr().(*net.TCPAddr)
+				tunnelPeer, tunnelOK := tcpConn.RemoteAddr().(*net.TCPAddr)
+				if !controlOK || !tunnelOK || !controlPeer.IP.Equal(tunnelPeer.IP) {
+					s.logger.Debugf("discarding tunnel connection from unexpected peer %s", tcpConn.RemoteAddr())
+					_ = tcpConn.Close()
+					continue
 				}
 			}
 
-			// Set keep-alive settings
+			if err := tcpConn.SetNoDelay(s.config.Nodelay); err != nil {
+				s.logger.Warnf("failed to set TCP_NODELAY for %s: %v", tcpConn.RemoteAddr(), err)
+			}
 			if err := tcpConn.SetKeepAlive(true); err != nil {
-				s.logger.Warnf("failed to enable TCP keep-alive for %s: %v", tcpConn.RemoteAddr().String(), err)
-			} else {
-				s.logger.Tracef("TCP keep-alive enabled for %s", tcpConn.RemoteAddr().String())
+				s.logger.Warnf("failed to enable TCP keep-alive for %s: %v", tcpConn.RemoteAddr(), err)
 			}
 			if err := tcpConn.SetKeepAlivePeriod(s.config.KeepAlive); err != nil {
-				s.logger.Warnf("failed to set TCP keep-alive period for %s: %v", tcpConn.RemoteAddr().String(), err)
+				s.logger.Warnf("failed to set TCP keep-alive period for %s: %v", tcpConn.RemoteAddr(), err)
 			}
 
-			if !s.enqueueAcceptedConnection(conn) {
+			// The first connection establishes the authenticated control channel.
+			// Every subsequent pooled TCP connection must prove possession of the
+			// configured token before entering the forwarding queue.
+			if control == nil {
+				if !s.enqueueAcceptedConnection(conn) {
+					if total, logNow := s.usageMonitor.RecordRejected(); logNow {
+						s.logger.Warnf("tunnel/handshake channel full; rejecting connection from %s (total rejected/dropped=%d)", conn.RemoteAddr(), total)
+					}
+					_ = conn.Close()
+				}
+				continue
+			}
+
+			select {
+			case dataWorkers <- struct{}{}:
+				go func(conn net.Conn, expectedControl net.Conn) {
+					defer func() { <-dataWorkers }()
+					legacy, authErr := utils.AuthenticateDataChannelServer(conn, s.config.Token, s.config.AllowLegacyDataConnections)
+					if authErr != nil {
+						s.logger.Debugf("rejected unauthenticated TCP data channel from %s: %v", conn.RemoteAddr(), authErr)
+						_ = conn.Close()
+						return
+					}
+					if s.ctx.Err() != nil || s.getControlChannel() != expectedControl {
+						_ = conn.Close()
+						return
+					}
+					if legacy {
+						s.logger.Warnf("accepting legacy unauthenticated TCP data channel from %s; disable allow_legacy_data_connections after upgrading all clients", conn.RemoteAddr())
+					}
+					if !s.enqueueAcceptedConnection(conn) {
+						if total, logNow := s.usageMonitor.RecordRejected(); logNow {
+							s.logger.Warnf("tunnel channel full; rejecting authenticated connection from %s (total rejected/dropped=%d)", conn.RemoteAddr(), total)
+						}
+						_ = conn.Close()
+					}
+				}(conn, control)
+			default:
 				if total, logNow := s.usageMonitor.RecordRejected(); logNow {
-					s.logger.Warnf("tunnel/handshake channel full; rejecting connection from %s (total rejected/dropped=%d)", conn.RemoteAddr(), total)
+					s.logger.Warnf("data-channel authentication capacity full; rejecting %s (total rejected/dropped=%d)", conn.RemoteAddr(), total)
 				}
 				_ = conn.Close()
 			}
