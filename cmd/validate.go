@@ -43,6 +43,9 @@ func ValidateConfig(cfg *config.Config) error {
 		if err := validateServerTransportOptions(cfg.Server.Transport, cfg.Server.AcceptUDP, cfg.Server.ProxyProtocol); err != nil {
 			return err
 		}
+		if cfg.Server.AllowLegacyDataConnections && cfg.Server.Transport != config.TCP && cfg.Server.Transport != config.TCPMUX {
+			return fmt.Errorf("server.allow_legacy_data_connections is supported only by tcp and tcpmux transports")
+		}
 		if err := validateEndpoint("server.bind_addr", cfg.Server.BindAddr); err != nil {
 			return err
 		}
