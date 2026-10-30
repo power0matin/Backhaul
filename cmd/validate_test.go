@@ -68,6 +68,19 @@ func TestValidateConfig(t *testing.T) {
 		}
 	})
 
+	t.Run("legacy data-channel fallback is TCP-only", func(t *testing.T) {
+		cfg := validServerConfig()
+		cfg.Server.AllowLegacyDataConnections = true
+		cfg.Server.Transport = config.WS
+		if err := ValidateConfig(cfg); err == nil {
+			t.Fatal("legacy TCP data-channel fallback was accepted for WebSocket transport")
+		}
+		cfg.Server.Transport = config.TCPMUX
+		if err := ValidateConfig(cfg); err != nil {
+			t.Fatalf("legacy TCPMUX fallback was rejected: %v", err)
+		}
+	})
+
 	t.Run("wss requires certificate", func(t *testing.T) {
 		cfg := validServerConfig()
 		cfg.Server.Transport = config.WSSMUX
@@ -144,6 +157,9 @@ func TestSecurityAndPoolDefaults(t *testing.T) {
 	}
 	if cfg.Client.MaxPoolSize < cfg.Client.ConnectionPool || cfg.Client.MaxPoolSize <= 0 {
 		t.Fatalf("invalid adaptive pool default: base=%d max=%d", cfg.Client.ConnectionPool, cfg.Client.MaxPoolSize)
+	}
+	if cfg.Server.AllowLegacyDataConnections {
+		t.Fatal("legacy unauthenticated data channels must default to disabled")
 	}
 }
 

@@ -106,4 +106,16 @@ triggered during the canary window.
 - [ ] Update final technical documentation and measured results.
 - [ ] Validate release CI and build verified release artifacts/checksums.
 
-Exit gate: only tag/recommend v0.8.1 if the accumulated evidence supports it.
+Exit gate: only tag/recommend v0.8.1 if the accumulated evidence supports it.\n\n## Stage 7 — Authenticated TCP data pool
+
+- [x] Replace source-IP-only trust with a fresh per-connection challenge.
+- [x] Require an HMAC-SHA256 proof derived from the configured tunnel token;
+  never send the token on pooled TCP/TCPMUX data connections.
+- [x] Keep source-IP validation as an additional policy.
+- [x] Add a same-source-IP unauthenticated regression test.
+- [x] Provide an explicit, disabled-by-default legacy-client migration switch.
+
+The legacy switch is intentionally temporary. Upgrade the server with the
+switch enabled, upgrade all paired clients, then disable the switch. It must
+not be left enabled on a public listener.
+

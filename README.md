@@ -20,9 +20,11 @@ Welcome to the **`Backhaul`** project! This project provides a high-performance 
 
 1. [Introduction](#introduction)
 2. [v0.8.0 production hardening](#v080-production-hardening)
-3. [Features](#features)
-4. [Installation](#installation)
-5. [Usage](#usage)
+3. [v0.8.1 TCP data-channel authentication](#v081-tcp-data-channel-authentication)
+4. [Changelog](CHANGELOG.md)
+5. [Features](#features)
+6. [Installation](#installation)
+7. [Usage](#usage)
    - [Configuration Options](#configuration-options)
    - [Detailed Configuration](#detailed-configuration)
       - [TCP Configuration](#tcp-configuration)
@@ -32,12 +34,12 @@ Welcome to the **`Backhaul`** project! This project provides a high-performance 
       - [Secure WebSocket Configuration](#secure-websocket-configuration)
       - [WS Multiplexing Configuration](#ws-multiplexing-configuration)
       - [WSS Multiplexing Configuration](#wss-multiplexing-configuration)
-6. [Generating a Self-Signed TLS Certificate with OpenSSL](#generating-a-self-signed-tls-certificate-with-openssl)
-7. [Running backhaul as a service](#running-backhaul-as-a-service)
-8. [FAQ](#faq)
-9. [Benchmark](#benchmark)
-10. [License](#license)
-11. [Donation](#donation)
+8. [Generating a Self-Signed TLS Certificate with OpenSSL](#generating-a-self-signed-tls-certificate-with-openssl)
+9. [Running backhaul as a service](#running-backhaul-as-a-service)
+10. [FAQ](#faq)
+11. [Benchmark](#benchmark)
+12. [License](#license)
+13. [Donation](#donation)
 
 ---
 
@@ -73,6 +75,25 @@ existing transports and wire framing while focusing on failure behavior:
 
 See [PERFORMANCE.md](./PERFORMANCE.md) for the issue-by-issue audit,
 reproduction methodology, stress/soak results, and baseline comparison.
+
+## v0.8.1 TCP data-channel authentication
+
+TCP and TCPMUX pool connections now perform a one-time server challenge and
+prove possession of the configured tunnel token using HMAC-SHA256. The token is
+not sent on pooled data connections. The source-IP comparison remains as an
+additional restriction, not as the authentication mechanism.
+
+The server rejects unauthenticated pool connections by default. For a
+controlled rolling upgrade from an older client, set
+`allow_legacy_data_connections = true` on the TCP/TCPMUX server before
+upgrading clients. Upgrade the server first, then upgrade every paired client,
+and finally set the option back to `false`. Legacy connections are delayed
+briefly while the server distinguishes old clients from authenticated peers.
+Do not leave legacy mode enabled on an Internet-facing listener.
+
+New v0.8.1 clients require the new server-side data-channel handshake; upgrade
+the server before upgrading its client. Other transports retain their existing
+transport-level authentication behavior.
 
 ## Features
 
@@ -132,6 +153,7 @@ To start using the solution, you'll need to configure both server and client com
     accept_udp = false             # Only supported by transport = "tcp". (optional, default: false)
      proxy_protocol = false         # Only supported by tcp, tcpmux, wsmux, and wssmux.
     token = "your_token"          # Shared strong secret; required and identical on server and client.
+    allow_legacy_data_connections = false # TCP/TCPMUX only; temporary old-client migration switch. Keep false in normal operation.
     keepalive_period = 75         # Interval in seconds to send keep-alive packets (1–86400; default: 75).
     nodelay = false               # Enable TCP_NODELAY (optional, default: false).
     channel_size = 2048           # Bounded tunnel/local queue size. Brief saturation gets bounded backpressure; persistent overload is rejected. (optional, default: 2048).
@@ -209,7 +231,7 @@ To start using the solution, you'll need to configure both server and client com
    mss = 1360                    # TCP/TCPMux: Maximum Segment Size in bytes; controls max TCP payload size to avoid fragmentation. (default: system-defined)
    so_rcvbuf = 1048576           # TCP/TCPMux: Socket receive buffer size (bytes); larger buffer allows higher throughput on receive side. (default: system-defined)
    so_sndbuf = 4194304           # TCP/TCPMux: Socket send buffer size (bytes); controls send queue size to manage outgoing data flow. (default: system-defined)
-   tls_verify = false             # WSS/WSSMUX only. Set true for normal CA/hostname verification; false preserves v0.7.2 self-signed behavior.
+   tls_verify = true              # WSS/WSSMUX only. Omitted value defaults to true; false explicitly disables certificate verification.
    ```
 
    To start the `client`:
@@ -287,10 +309,10 @@ credentials.
 possibly monitor credentials; use restrictive permissions such as
 `chmod 600 config.toml`.
 
-For `wss` and `wssmux`, `tls_verify = false` remains the default so
-v0.7.2 deployments using self-signed certificates keep working. Prefer
-`tls_verify = true` when the server certificate chains to a CA trusted by the
-client and its hostname matches `remote_addr`.
+For `wss` and `wssmux`, `tls_verify` defaults to `true` when omitted.
+Set it to `false` only as an explicit compatibility exception for a deliberate
+self-signed or otherwise untrusted certificate deployment. Public deployments
+should keep certificate and hostname verification enabled.
 
 ### v0.7.2 compatibility notes
 

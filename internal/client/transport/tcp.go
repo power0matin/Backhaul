@@ -339,6 +339,11 @@ func (c *TcpTransport) tunnelDialer() {
 	defer stopClose()
 	defer tcpConn.Close()
 
+	if err := utils.AuthenticateDataChannelClient(tcpConn, c.config.Token); err != nil {
+		c.logger.Debugf("data-channel authentication failed: %v", err)
+		return
+	}
+
 	// Increment active connections counter
 	atomic.AddInt32(&c.poolConnections, 1)
 
