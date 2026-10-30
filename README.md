@@ -49,7 +49,7 @@ Use `wss` or `wssmux` when the tunnel transport itself must be protected by TLS.
 
 For the simplest setup, use **[Backhaul Manager](https://github.com/power0matin/backhaul-manager)**. It provides an interactive installer and manager for both tunnel endpoints, supports this fork as its recommended binary source, and includes profiles, link tests, backups, migration and health checks.
 
-[**Install and configure a tunnel with Backhaul Manager →**](https://github.com/power0matin/backhaul-manager?utm_source=chatgpt.com)
+[**Install and configure a tunnel with Backhaul Manager →**](https://github.com/power0matin/backhaul-manager)
 
 ### Prebuilt binaries
 
