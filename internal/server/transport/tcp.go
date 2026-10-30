@@ -389,7 +389,7 @@ func (s *TcpTransport) acceptTunnelConn(listener net.Listener) {
 			// Every subsequent pooled TCP connection must prove possession of the
 			// configured token before entering the forwarding queue.
 			if control == nil {
-				if !s.enqueueAcceptedConnection(authenticatedConn) {
+				if !s.enqueueAcceptedConnection(conn) {
 					if total, logNow := s.usageMonitor.RecordRejected(); logNow {
 						s.logger.Warnf("tunnel/handshake channel full; rejecting connection from %s (total rejected/dropped=%d)", conn.RemoteAddr(), total)
 					}
@@ -415,7 +415,7 @@ func (s *TcpTransport) acceptTunnelConn(listener net.Listener) {
 					if legacy {
 						s.logger.Warnf("accepting legacy unauthenticated TCP data channel from %s; disable allow_legacy_data_connections after upgrading all clients", conn.RemoteAddr())
 					}
-					if !s.enqueueAcceptedConnection(conn) {
+					if !s.enqueueAcceptedConnection(authenticatedConn) {
 						if total, logNow := s.usageMonitor.RecordRejected(); logNow {
 							s.logger.Warnf("tunnel channel full; rejecting authenticated connection from %s (total rejected/dropped=%d)", conn.RemoteAddr(), total)
 						}
