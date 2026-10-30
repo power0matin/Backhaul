@@ -19,12 +19,13 @@ Welcome to the **`Backhaul`** project! This project provides a high-performance 
 ## Table of Contents
 
 1. [Introduction](#introduction)
-2. [v0.8.0 production hardening](#v080-production-hardening)
-3. [v0.8.1 TCP data-channel authentication](#v081-tcp-data-channel-authentication)
-4. [Changelog](CHANGELOG.md)
-5. [Features](#features)
-6. [Installation](#installation)
-7. [Usage](#usage)
+2. [Backhaul Manager (companion project)](#backhaul-manager-companion-project)
+3. [v0.8.0 production hardening](#v080-production-hardening)
+4. [v0.8.1 TCP data-channel authentication](#v081-tcp-data-channel-authentication)
+5. [Changelog](CHANGELOG.md)
+6. [Features](#features)
+7. [Installation](#installation)
+8. [Usage](#usage)
    - [Configuration Options](#configuration-options)
    - [Detailed Configuration](#detailed-configuration)
       - [TCP Configuration](#tcp-configuration)
@@ -34,18 +35,28 @@ Welcome to the **`Backhaul`** project! This project provides a high-performance 
       - [Secure WebSocket Configuration](#secure-websocket-configuration)
       - [WS Multiplexing Configuration](#ws-multiplexing-configuration)
       - [WSS Multiplexing Configuration](#wss-multiplexing-configuration)
-8. [Generating a Self-Signed TLS Certificate with OpenSSL](#generating-a-self-signed-tls-certificate-with-openssl)
-9. [Running backhaul as a service](#running-backhaul-as-a-service)
-10. [FAQ](#faq)
-11. [Benchmark](#benchmark)
-12. [License](#license)
-13. [Donation](#donation)
+9. [Generating a Self-Signed TLS Certificate with OpenSSL](#generating-a-self-signed-tls-certificate-with-openssl)
+10. [Running backhaul as a service](#running-backhaul-as-a-service)
+11. [FAQ](#faq)
+12. [Benchmark](#benchmark)
+13. [License](#license)
+14. [Donation](#donation)
 
 ---
 
 ## Introduction
 
 This project offers a robust reverse tunneling solution to overcome NAT and firewall restrictions, supporting various transport protocols. It’s engineered for high efficiency and concurrency.
+
+## Backhaul Manager (companion project)
+
+For a guided setup and easier day-to-day operations, you can use **[Backhaul Manager](https://github.com/power0matin/backhaul-manager)**, an interactive Bash-based installer and operations manager maintained alongside this Backhaul fork.
+
+It helps configure both sides of a tunnel (Iran-side server and foreign-side client) and provides seven transport options (`tcp`, `tcpmux`, `udp`, `ws`, `wss`, `wsmux`, and `wssmux`). Other features include standard and advanced setup modes, named profiles, pre-tunnel link tests, validated backups, host migration, health checks, diagnostics, logs and CLI maintenance.
+
+Backhaul Manager supports **`power0matin/Backhaul`** as its recommended binary source, as well as **`Musixal/Backhaul`** upstream. It is an optional companion project: Backhaul can still be installed and configured directly using the instructions below.
+
+See the [Backhaul Manager README](https://github.com/power0matin/backhaul-manager#readme) for installation instructions, requirements and operational details. The manager needs root privileges for installation and service-management operations; review its script before running it.
 
 ## v0.8.0 production hardening
 
