@@ -1,6 +1,7 @@
 package utils
 
 import (
+	"bufio"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
@@ -18,6 +19,15 @@ const (
 )
 
 var dataChannelProofDomain = []byte("backhaul/data-channel-auth/v1\x00")
+
+type bufferedDataConn struct {
+	net.Conn
+	reader *bufio.Reader
+}
+
+func (c *bufferedDataConn) Read(p []byte) (int, error) {
+	return c.reader.Read(p)
+}
 
 // AuthenticateDataChannelClient proves possession of the configured tunnel
 // token on a newly established TCP data connection. The token itself is never
@@ -47,50 +57,55 @@ func AuthenticateDataChannelClient(conn net.Conn, token string) error {
 }
 
 // AuthenticateDataChannelServer authenticates a pooled TCP connection with a
-// one-time server challenge and a token-derived HMAC proof. It returns
-// legacy=true only when no authentication marker arrives before the deadline
-// and the operator has explicitly enabled legacy data connections.
-//
-// Legacy mode exists only to support a controlled rolling upgrade. It must be
-// disabled again after every client has been upgraded.
-func AuthenticateDataChannelServer(conn net.Conn, token string, allowLegacy bool) (legacy bool, err error) {
+// one-time server challenge and a token-derived HMAC proof. When legacy mode is
+// explicitly enabled, a connection whose first byte is not the auth marker is
+// returned through a buffered wrapper so a legacy TCPMUX SMUX preamble is not
+// consumed. A silent legacy TCP connection is also accepted only in that mode.
+func AuthenticateDataChannelServer(conn net.Conn, token string, allowLegacy bool) (net.Conn, bool, error) {
 	if conn == nil {
-		return false, errors.New("data channel connection is nil")
+		return nil, false, errors.New("data channel connection is nil")
 	}
 	if err := conn.SetDeadline(time.Now().Add(dataChannelServerTimeout)); err != nil {
-		return false, fmt.Errorf("set data-channel authentication deadline: %w", err)
+		return nil, false, fmt.Errorf("set data-channel authentication deadline: %w", err)
 	}
 	defer conn.SetDeadline(time.Time{})
 
-	var marker [1]byte
-	if _, err := io.ReadFull(conn, marker[:]); err != nil {
+	reader := bufio.NewReader(conn)
+	marker, err := reader.Peek(1)
+	if err != nil {
 		var netErr net.Error
 		if allowLegacy && errors.As(err, &netErr) && netErr.Timeout() {
-			return true, nil
+			return conn, true, nil
 		}
-		return false, fmt.Errorf("read data-channel authentication marker: %w", err)
+		return nil, false, fmt.Errorf("read data-channel authentication marker: %w", err)
 	}
 	if marker[0] != SG_DataAuth {
-		return false, fmt.Errorf("unexpected data-channel authentication marker %d", marker[0])
+		if allowLegacy {
+			return &bufferedDataConn{Conn: conn, reader: reader}, true, nil
+		}
+		return nil, false, fmt.Errorf("unexpected data-channel authentication marker %d", marker[0])
+	}
+	if _, err := reader.ReadByte(); err != nil {
+		return nil, false, fmt.Errorf("consume data-channel authentication marker: %w", err)
 	}
 
 	challenge := make([]byte, dataChannelChallengeSize)
 	if _, err := rand.Read(challenge); err != nil {
-		return false, fmt.Errorf("generate data-channel challenge: %w", err)
+		return nil, false, fmt.Errorf("generate data-channel challenge: %w", err)
 	}
 	if err := writeAll(conn, challenge); err != nil {
-		return false, fmt.Errorf("send data-channel challenge: %w", err)
+		return nil, false, fmt.Errorf("send data-channel challenge: %w", err)
 	}
 
 	proof := make([]byte, dataChannelChallengeSize)
-	if _, err := io.ReadFull(conn, proof); err != nil {
-		return false, fmt.Errorf("read data-channel proof: %w", err)
+	if _, err := io.ReadFull(reader, proof); err != nil {
+		return nil, false, fmt.Errorf("read data-channel proof: %w", err)
 	}
 	expected := dataChannelProof(token, challenge)
 	if !hmac.Equal(proof, expected) {
-		return false, errors.New("invalid data-channel authentication proof")
+		return nil, false, errors.New("invalid data-channel authentication proof")
 	}
-	return false, nil
+	return conn, false, nil
 }
 
 func dataChannelProof(token string, challenge []byte) []byte {
