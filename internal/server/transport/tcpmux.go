@@ -62,6 +62,7 @@ type TcpMuxConfig struct {
 	SO_RCVBUF        int
 	SO_SNDBUF        int
 	ProxyProtocol    bool
+	AllowLegacyDataConnections bool
 }
 
 func NewTcpMuxServer(parentCtx context.Context, config *TcpMuxConfig, logger *logrus.Logger) *TcpMuxTransport {
