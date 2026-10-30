@@ -346,6 +346,11 @@ func (c *TcpMuxTransport) tunnelDialer() {
 	defer stopClose()
 	defer tunnelConn.Close()
 
+	if err := utils.AuthenticateDataChannelClient(tunnelConn, c.config.Token); err != nil {
+		c.logger.Debugf("tcpmux data-channel authentication failed: %v", err)
+		return
+	}
+
 	// Increment active connections counter
 	atomic.AddInt32(&c.poolConnections, 1)
 
