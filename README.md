@@ -82,7 +82,7 @@ go build -o backhaul .
 
 ## Quick start
 
-The following example exposes port `443` on the server and forwards it to port `443` on the client. Replace the example token with the same strong, unique secret on both endpoints.
+The following example exposes port `443` on the server and forwards it to `127.0.0.1:443` on the client. Replace the example token with the same strong, unique secret on both endpoints.
 
 **Server — `server.toml`:**
 
@@ -104,14 +104,19 @@ token = "CHANGE_THIS_TO_THE_SAME_RANDOM_SECRET"
 connection_pool = 8
 ```
 
-Start Backhaul on each endpoint:
+Start the server on the **server host**:
 
 ```bash
 ./backhaul -c server.toml
+```
+
+Start the client on the **client host**:
+
+```bash
 ./backhaul -c client.toml
 ```
 
-In this mapping, the server listens on port `443` and forwards traffic to port `443` on the client side. Allow the control port (`3080/tcp`) and the forwarded port (`443/tcp`) through the relevant firewalls. Restrict the control port to the client address where possible.
+A port-only target such as `443` resolves to `127.0.0.1:443` on the client. To target another client-side host, use an explicit address such as `10.0.0.5:443`. Allow the tunnel control port (`3080/tcp`) and the exposed server listener (`443/tcp`) through the relevant firewalls. Restrict the control port to the client address where possible.
 
 For all configuration keys, defaults and transport-specific restrictions, see the [Configuration Reference](docs/configuration.md).
 
